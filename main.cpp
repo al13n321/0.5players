@@ -29,20 +29,14 @@ int main() {
     }
     w.load_replays_from_file();
     w.init_finish();
+    render_init(w);
 
     while (true) {
         BeginDrawing();
         SetWindowTitle(TextFormat("fps: %d", GetFPS()));
 
         update(w);
-
-        BeginMode2D(w.camera);
-
         render(w);
-
-        EndMode2D();
-
-        render_ui(w);
 
         EndDrawing();
 

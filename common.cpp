@@ -296,6 +296,41 @@ struct Action {
     Direction dir;
 };
 
+enum WhichMesh {
+    MESH_TILE_QUARTER_0 = 0,
+    MESH_TILE_QUARTER_7 = 7,
+    MESH_BLACK_TILE_QUARTER_0 = 8,
+    MESH_BLACK_TILE_QUARTER_7 = 15,
+    MESH_VOID_QUARTER_0 = 16,
+    MESH_VOID_QUARTER_7 = 23,
+
+    MESH_TRIGGER = 24,
+    MESH_TRIGGER_CORNER,
+    MESH_BARRIER,
+    MESH_FLOOR,
+
+    MESH_COUNT,
+};
+
+struct Instance {
+    Matrix transform {};
+    Vector2 wire_texture_offset {};
+    Direction wire_texture_rotation = DIR_LEFT;
+};
+
+struct MeshState {
+    Mesh mesh {};
+    std::vector<Instance> instances;
+    size_t wire_state_start_idx = 0;
+};
+
+struct Render {
+    std::array<MeshState, MESH_COUNT> meshes {};
+    Material material {};
+    Texture wire_state_texture {};
+    Image wire_state_image {};
+};
+
 struct World {
     IVec size; // first and last cell of each row and column are sentinel cells that are not rendered and not updated
     std::vector<std::vector<Cell>> cells;
@@ -312,6 +347,9 @@ struct World {
     std::array<KeyRepeater, 4> dir_key_repeat;
     Editor editor;
 
+    Render render;
+
+    float absolute_zoom = 0; // like camera.zoom but independent of resolution; (world_coords.y - camera.target.y) * absolute_zoom = screen_coords.y, where whole screen is [-1, 1]
     Camera2D camera {};
     IVec prev_hover {-1, -1};
 
@@ -333,11 +371,12 @@ struct World {
     void init_finish() {
         editor.init();
 
-        Vector2 world_size {(float)size.x, (float)size.y};
-        camera.target = world_size * .5f;
-        Vector2 resolution {(float)GetRenderWidth(), (float)GetRenderHeight()};
-        Vector2 ratio = resolution / world_size;
-        camera.zoom = std::min(ratio.x, ratio.y);
+        if (absolute_zoom == 0) {
+            camera.target = size.to_float() * .5f;
+            float aspect = (float)GetRenderWidth() / (float)GetRenderHeight();
+            Vector2 ratio = Vector2 {aspect, 1.f} / size.to_float();
+            absolute_zoom = std::min(ratio.x, ratio.y) * 2.f;
+        }
 
         push_undo();
     }

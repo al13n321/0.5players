@@ -465,16 +465,17 @@ void update(World &w) {
     float zoom_amount = std::exp(zoom_sensitivity * GetMouseWheelMove());
     if (zoom_amount != 1) {
         // Zoom such that mouse remains stationary in the world.
-        float new_zoom = w.camera.zoom * zoom_amount;
+        float new_zoom = w.absolute_zoom * zoom_amount;
         Vector2 p = GetMousePosition();
-        w.camera.target += (p - w.camera.offset) * (1/w.camera.zoom - 1/new_zoom);
-        w.camera.zoom = new_zoom;
+        w.camera.target += (p / w.camera.offset - Vector2 {1.f, 1.f}) * (1/w.absolute_zoom - 1/new_zoom);
+        w.absolute_zoom = new_zoom;
     }
     if (IsMouseButtonDown(MOUSE_BUTTON_MIDDLE)) {
         w.camera.target -= GetMouseDelta() / w.camera.zoom;
     }
     w.camera.target = Vector2Max(Vector2{0, 0}, Vector2Min(w.size.to_float(), w.camera.target));
     w.camera.offset = {(float)GetRenderWidth()/2, (float)GetRenderHeight()/2};
+    w.camera.zoom = w.absolute_zoom * w.camera.offset.y;
 
     IVec hover = w.hovered_cell();
 

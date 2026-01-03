@@ -15,6 +15,8 @@ void load_pod(T *x, const char **in, const char *end) {
 void World::save(std::vector<char> &out) const {
     //double start_time = GetTime();
 
+    // todo: save camera.target and absolute_zoom
+    
     size_t version = 4;
     save_pod(&version, out);
     save_pod(&size, out);

@@ -1,4 +1,59 @@
-void draw_power(const Power power, Vector2 pos) {
+const char *vertex_shader = R"(
+#version 330
+
+in vec3 vertexPosition;
+in vec2 vertexTexCoord;
+in vec3 vertexNormal;
+in vec4 vertexColor;
+
+in mat4 instanceTransform;
+
+uniform mat4 mvp;
+uniform float asdqwe=0.;
+
+out vec2 fragTexCoord;
+out vec4 fragColor;
+
+void main()
+{
+    fragTexCoord = vertexTexCoord;
+    fragColor = vertexColor;
+
+    vec4 p1 = mvp*instanceTransform*vec4(vertexPosition, 1.0);
+    vec4 p2 = vec4(vertexPosition, 1.0);
+    gl_Position = p1*asdqwe+p2*(1.-asdqwe);
+}
+)";
+
+const char *fragment_shader = R"(
+#version 330
+
+in vec2 fragTexCoord;
+in vec4 fragColor;
+
+uniform sampler2D texture0;
+uniform vec4 colDiffuse;
+
+out vec4 finalColor;
+
+void main()
+{
+    //vec4 texelColor = texture(texture0, fragTexCoord);
+    //finalColor = texelColor*colDiffuse*fragColor;
+    finalColor = vec4(1.,0.,1.,1.);
+}
+)";
+
+void render_init(World &w) {
+    w.render.material = LoadMaterialDefault();
+    //asdqwe w.render.material.maps[0].texture = LoadTexture("wires.png");
+    w.render.material.shader = LoadShaderFromMemory(vertex_shader, fragment_shader);
+
+    //asdqwe w.render.meshes[MESH_FLOOR].mesh = GenMeshPlane(1., 1., 1, 1);
+    w.render.meshes[MESH_FLOOR].mesh = GenMeshCube(1, 1, 1);
+}
+
+/*void draw_power(const Power power, Vector2 pos) {
     const float outer_radius = 20./70;
     const float thickness = 8./70;
     const float crossing_outer_gap = 4./70;
@@ -207,9 +262,52 @@ void draw_selection_indicator(const World &w) {
             DrawTriangleFan(&points[0], 6, col);
         }
     }
+    }*/
+
+void render_ui(World &w) {
+    if (w.editor.on) {
+        /*
+        DrawText(TextFormat("%d %d", w.prev_hover.x, w.prev_hover.y), 10, 50, 20, GREEN);
+
+        BeginMode2D(w.editor.palette_camera);
+
+        DrawRectangleV({-w.editor.palette_width, 0}, {w.editor.palette_width, (float)GetRenderHeight() / w.editor.palette_camera.zoom}, DARKBLUE);
+        std::vector<std::vector<Cell>> cells(3, std::vector<Cell>(3));
+        for (const EditorCell &cell : w.editor.palette) {
+            if (cell.equivalent(w.editor.held)) {
+                const float s = 0.2;
+                DrawRectangleV({cell.rect.x - s/2, cell.rect.y - s/2}, {1.f + s, 1.f + s}, WHITE);
+            }
+            if (cell.type == EDITOR_FLOOR) {
+                cells[1][1] = cell.floor;
+                draw_floor(cells, {1, 1}, {cell.rect.x, cell.rect.y});
+            } else if (cell.type == EDITOR_TILE) {
+                draw_tile(cell.tile, 0, {cell.rect.x, cell.rect.y});
+            }
+        }
+
+        EndMode2D();
+        */
+    }
+
+    if (w.move.manual_advance != -1)
+        DrawText("debug mode, press [ to go back to normal, press ] to advance animation by one step", 10, 10, 20, PURPLE);
+    if (w.recording_active != -1)
+        DrawText(TextFormat("recording macro number %d (%lu moves)", w.recording_active, w.recordings.at(w.recording_active).size()), 10, 100, 20, GREEN);
+    if (w.buffered_actions.size() > 10)
+        DrawText(TextFormat("actions in queue: %lu", w.buffered_actions.size()), 10, 130, 20, GREEN);
 }
 
-void render(const World &w) {
+Vector2 get_wire_texture_offset(const Power &power) {
+    //asdqwe
+    return {};
+}
+
+void render(World &w) {
+    for (MeshState &mesh: w.render.meshes) {
+        mesh.instances.clear();
+    }
+
     Color clear_color;
     if (w.editor.on)
         clear_color = {100, 100, 200, 255};
@@ -219,13 +317,88 @@ void render(const World &w) {
         clear_color = BLACK;
     ClearBackground(clear_color);
 
+    Camera3D camera3d {.position = {w.camera.target.x, 100, w.camera.target.y}, .target = {w.camera.target.x, 90, w.camera.target.y}, .up = {0, 0, 1}, .fovy = 2.f / w.absolute_zoom, .projection = CAMERA_ORTHOGRAPHIC};
+    BeginMode3D(camera3d);
+
     for (int y = 1; y + 1 < w.size.y; ++y) {
         for (int x = 1; x + 1 < w.size.x; ++x) {
             IVec pos {x, y};
             const Cell &cell = w.get_cell(pos);
-            draw_floor(w.cells, {x, y}, pos.to_float());
+            Vector2 wire_texture_offset = get_wire_texture_offset(cell.floor_power);
+            Matrix transform = MatrixTranslate((float)pos.x + .5f, 0.f, (float)pos.y + .5f);
+            if (cell.floor == FLOOR_PASSABLE) {
+                w.render.meshes.at(MESH_FLOOR).instances.push_back({.transform = transform, .wire_texture_offset = wire_texture_offset});
+            }/*
+    } else if (cell.floor == FLOOR_WALL) {
+        const float margin = .04;
+        Vector2 p = pos;
+        Vector2 q = pos + Vector2{1.f, 1.f};
+        if (!(cell.weld & WALL_LEFT)) p.x += margin;
+        if (!(cell.weld & WALL_UP)) p.y += margin;
+        if (!(cells.at(idx.y).at(idx.x + 1).weld & WALL_LEFT)) q.x -= margin;
+        if (!(cells.at(idx.y + 1).at(idx.x).weld & WALL_UP)) q.y -= margin;
+        DrawRectangleV(p, q - p, {47, 47, 47, 255});
+    } else if (cell.floor == FLOOR_TRIGGER) {
+        DrawRectangleV(pos + Vector2{.1f, .1f}, {.8f, .8f}, {104, 104, 104, 255});
+        DrawRectangleV(pos + Vector2{.2f, .2f}, {.6f, .6f}, {72, 72, 72, 255});
+        DrawRectangleV(pos + Vector2{.3f, .3f}, {.4f, .4f}, {104, 104, 104, 255});
+        if ((cells.at(idx.y - 1).at(idx.x).barrier & WALL_LEFT) || (cells.at(idx.y).at(idx.x - 1).barrier & WALL_UP))
+            DrawRectangleV(pos, {.2f, .2f}, {190, 190, 190, 255});
+        if ((cells.at(idx.y - 1).at(idx.x + 1).barrier & WALL_LEFT) || (cells.at(idx.y).at(idx.x + 1).barrier & WALL_UP))
+            DrawRectangleV({pos.x + .8f, pos.y}, {.2f, .2f}, {190, 190, 190, 255});
+        if ((cells.at(idx.y + 1).at(idx.x).barrier & WALL_LEFT) || (cells.at(idx.y + 1).at(idx.x - 1).barrier & WALL_UP))
+            DrawRectangleV({pos.x, pos.y + .8f}, {.2f, .2f}, {190, 190, 190, 255});
+        if ((cells.at(idx.y + 1).at(idx.x + 1).barrier & WALL_LEFT) || (cells.at(idx.y + 1).at(idx.x + 1).barrier & WALL_UP))
+            DrawRectangleV({pos.x + .8f, pos.y + .8f}, {.2f, .2f}, {190, 190, 190, 255});
+    }
+
+    draw_power(cell.floor_power, pos);
+
+    if (cell.floor == FLOOR_VOID) {
+        const float margin = 10./70;
+        const Color outer = {172, 172, 172, 255};
+        const Color inner = {0, 0, 0, 0};
+        if (cells.at(idx.y).at(idx.x - 1).floor != FLOOR_VOID)
+            DrawRectangleGradientEx({pos.x, pos.y, margin, 1.f}, outer, outer, inner, inner);
+        if (cells.at(idx.y - 1).at(idx.x).floor != FLOOR_VOID)
+            DrawRectangleGradientEx({pos.x, pos.y, 1.f, margin}, outer, inner, inner, outer);
+        if (cells.at(idx.y).at(idx.x + 1).floor != FLOOR_VOID)
+            DrawRectangleGradientEx({pos.x + 1.f - margin, pos.y, margin, 1.f}, inner, inner, outer, outer);
+        if (cells.at(idx.y + 1).at(idx.x).floor != FLOOR_VOID)
+            DrawRectangleGradientEx({pos.x, pos.y + 1.f - margin, 1.f, margin}, inner, outer, outer, inner);
+
+        uint8_t wall_wires = cell.floor_power.wires & WIRE_ALL_DIRECTIONS;
+        if (wall_wires)
+            draw_power({.wires = wall_wires, .power = (uint8_t)(cell.floor_power.power & wall_wires)}, pos);
+    }
+
+    if (cell.barrier) {
+        const float thickness = 8./70;
+        const Color col {120, 80, 120, 255};
+        const int segments = 8;
+        if (cell.barrier & WALL_LEFT) {
+            if (cell.barrier_active & WALL_LEFT) {
+                DrawRectangleV({pos.x - thickness * .5f, pos.y}, {thickness, 1.f}, col);
+            } else {
+                for (int i = 0; i < segments; i += 2)
+                    DrawRectangleV({pos.x - thickness * .5f, pos.y + (float)i / (float)segments}, {thickness, 1.f / (float)segments}, col);
+            }
+        }
+        if (cell.barrier & WALL_UP) {
+            if (cell.barrier_active & WALL_UP) {
+                DrawRectangleV({pos.x, pos.y - thickness * .5f}, {1.f, thickness}, col);
+            } else {
+                for (int i = 0; i < segments; i += 2)
+                    DrawRectangleV({pos.x + (float)i / (float)segments, pos.y - thickness * .5f}, {1.f / (float)segments, thickness}, col);
+            }
         }
     }
+
+    asdqwe;*/
+            //draw_floor(w.cells, {x, y}, pos.to_float());
+        }
+    }
+    /*
     for (int y = 1; y + 1 < w.size.y; ++y) {
         for (int x = 1; x + 1 < w.size.x; ++x) {
             IVec pos {x, y};
@@ -249,38 +422,36 @@ void render(const World &w) {
                 draw_tile(w.tiles.at(cell.tile), weld, fpos);
             }
         }
+        }*/
+    //draw_selection_indicator(w);
+
+    BeginShaderMode(w.render.material.shader);
+
+    //Ray ray = GetScreenToWorldRay({(float)GetScreenWidth()/2, (float)GetScreenHeight()/2}, camera3d);
+    //DrawSphere({50,0,50}, 10, WHITE);
+    //DrawMesh(w.render.meshes[MESH_FLOOR].mesh, w.render.material, MatrixTranslate(50,0,50));
+    //Matrix m[2] = {MatrixTranslate(50,0,50), MatrixIdentity()};
+    //DrawMeshInstanced(w.render.meshes[MESH_FLOOR].mesh, w.render.material, m, 2);
+
+    //*
+    std::vector<Matrix> transforms;
+    size_t wire_state_idx = 0;
+    for (MeshState &mesh: w.render.meshes) {
+        mesh.wire_state_start_idx = wire_state_idx;
+        wire_state_idx += mesh.instances.size();
     }
-    draw_selection_indicator(w);
-}
-
-void render_ui(World &w) {
-    if (w.editor.on) {
-        DrawText(TextFormat("%d %d", w.prev_hover.x, w.prev_hover.y), 10, 50, 20, GREEN);
-        
-        BeginMode2D(w.editor.palette_camera);
-
-        DrawRectangleV({-w.editor.palette_width, 0}, {w.editor.palette_width, (float)GetRenderHeight() / w.editor.palette_camera.zoom}, DARKBLUE);
-        std::vector<std::vector<Cell>> cells(3, std::vector<Cell>(3));
-        for (const EditorCell &cell : w.editor.palette) {
-            if (cell.equivalent(w.editor.held)) {
-                const float s = 0.2;
-                DrawRectangleV({cell.rect.x - s/2, cell.rect.y - s/2}, {1.f + s, 1.f + s}, WHITE);
-            }
-            if (cell.type == EDITOR_FLOOR) {
-                cells[1][1] = cell.floor;
-                draw_floor(cells, {1, 1}, {cell.rect.x, cell.rect.y});
-            } else if (cell.type == EDITOR_TILE) {
-                draw_tile(cell.tile, 0, {cell.rect.x, cell.rect.y});
-            }
+    for (MeshState &mesh: w.render.meshes) {
+        if (mesh.instances.empty())
+            continue;
+        transforms.resize(mesh.instances.size());
+        for (size_t i = 0; i < mesh.instances.size(); ++i) {
+            transforms[i] = mesh.instances[i].transform;
         }
+        DrawMeshInstanced(mesh.mesh, w.render.material, &transforms[0], (int)mesh.instances.size());
+        }//*/
 
-        EndMode2D();
-    }
+    EndShaderMode();
+    EndMode3D();
 
-    if (w.move.manual_advance != -1)
-        DrawText("debug mode, press [ to go back to normal, press ] to advance animation by one step", 10, 10, 20, PURPLE);
-    if (w.recording_active != -1)
-        DrawText(TextFormat("recording macro number %d (%lu moves)", w.recording_active, w.recordings.at(w.recording_active).size()), 10, 100, 20, GREEN);
-    if (w.buffered_actions.size() > 10)
-        DrawText(TextFormat("actions in queue: %lu", w.buffered_actions.size()), 10, 130, 20, GREEN);
+    render_ui(w);
 }
