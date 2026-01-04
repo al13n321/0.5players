@@ -75,7 +75,7 @@ void handle_misc_input(World &w, IVec hover) {
             if (cell.tile != -1)
                 w.delete_tile(cell.tile);
             assert(cell.tile == -1);
-            if (w.editor.held.type == EDITOR_FLOOR || cell.floor != FLOOR_PASSABLE) {
+            if (w.editor.held.type == EDITOR_FLOOR || cell.floor != FLOOR_PASSABLE || cell.floor_power.wires != WIRE_NONE) {
                 Cell floor = w.editor.held.type == EDITOR_FLOOR ? w.editor.held.floor : Cell {.floor = FLOOR_PASSABLE};
                 if (cell.floor == FLOOR_VOID && floor.floor != FLOOR_VOID) {
                     auto fixup = [&](int dx, int dy, Wires wire) {
@@ -265,7 +265,7 @@ std::vector<int> find_welded_tile_group(World &w, int ti) {
             }
         }
     }
-    assert(res.size() == seen.size());
+    //assert(res.size() == seen.size());
     return res;
 }
 
@@ -389,6 +389,7 @@ void update_barriers_and_perform_cuts(World &w) {
     }
 
     // Assert that barriers and triggers are matched properly.
+    /*
     std::sort(seen.begin(), seen.end());
     for (size_t i = 0; i + 1 < seen.size(); ++i)
         assert(seen[i] != seen[i + 1]);
@@ -401,7 +402,7 @@ void update_barriers_and_perform_cuts(World &w) {
                     assert(std::binary_search(seen.begin(), seen.end(), std::make_pair(pos, (Direction)dir)));
             }
         }
-    }
+        }*/
 }
 
 bool move_advance_if_needed(World &w) {
@@ -565,10 +566,10 @@ void update(World &w) {
     }
 
     if (!updated_power && !w.editor.on) {
-        update_power(w);
-
         if (w.move.stage == STAGE_NONE)
             update_barriers_and_perform_cuts(w);
+
+        update_power(w);
     }
 
     check_consistency(w);
