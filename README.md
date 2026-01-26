@@ -4,7 +4,7 @@ Play the original game 0PLAYER here: https://plus.cerisetalis.com/0PLAYER/
 
 (If you're put off by the original game being just a static image, rest assured that you would enjoy the interactive version even less than staring at the static image.)
 
-I made this just to learn some gamedev (and because I got briefly obsessed with that game). The learning was a success! The original 2d version (commit beb5275) was made in 2 day, then it took a while to prettify it to the current state.
+I made this just to learn some gamedev (and because I got briefly obsessed with that game). The learning was a success! The original 2d version (commit beb5275) was made in 2 days, then it took a while to prettify it to the current state.
 
 ![screenshot](https://github.com/user-attachments/assets/d6032a86-5676-4ee1-8f13-aee8db52e8bf)
 
@@ -16,7 +16,7 @@ Game controls:
  * mouse click
  * wasd or arrows
  * can also drag tiles with the mouse
- * z to undo, z to redo
+ * z to undo, x to redo
 
 Janky terrible record/replay controls:
  * ctrl+digit (ctrl+0 .. ctrl+9) to start recording a macro (while recording, redo is not allowed; also, I wouldn't be surprised if undo during animation breaks recording, I haven't checked)

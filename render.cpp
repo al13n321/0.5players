@@ -558,11 +558,14 @@ void render(World &w) {
             Matrix transform = MatrixTranslate((float)pos.x + .5f, 0.f, (float)pos.y + .5f);
 
             if (is_edge) {
-                MeshState &mesh = w.render.meshes.at(MESH_VOID_QUARTER_7);
-                IVec neighbor {std::max(1, std::min(w.size.x - 2, x)), std::max(1, std::min(w.size.y - 2, y))};
-                PowerAnim power = w.get_cell(neighbor).floor_power.anim;
-                for (int dir = 0; dir < 4; ++dir) {
-                    mesh.instances.push_back({.transform = transform, .power = power, .pre_rotation = (Direction)dir});
+                if (x > 0 && y > 0) {
+                    // Hack to make the edge of the world look correct, at least for the original 0PLAYER map.
+                    MeshState &mesh = w.render.meshes.at(MESH_VOID_QUARTER_7);
+                    IVec neighbor {std::max(1, std::min(w.size.x - 2, x)), std::max(1, std::min(w.size.y - 2, y))};
+                    PowerAnim power = w.get_cell(neighbor).floor_power.anim;
+                    for (int dir = 0; dir < 4; ++dir) {
+                        mesh.instances.push_back({.transform = transform, .power = power, .pre_rotation = (Direction)dir});
+                    }
                 }
                 continue;
             }
