@@ -6,6 +6,8 @@ Play the original game 0PLAYER here: https://plus.cerisetalis.com/0PLAYER/
 
 I made this just to learn some gamedev (and because I got briefly obsessed with that game). The learning was a success! The original 2d version (commit beb5275) was made in 2 day, then it took a while to prettify it to the current state.
 
+![screenshot](https://github.com/user-attachments/assets/d6032a86-5676-4ee1-8f13-aee8db52e8bf)
+
 ---
 
 Game controls:
