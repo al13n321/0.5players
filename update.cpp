@@ -1,6 +1,13 @@
 void map_fixup(World &w) {
-    for (int y = 1; y + 1 < w.size.y; ++y) {
-        for (int x = 1; x + 1 < w.size.x; ++x) {
+    for (int y = 0; y < w.size.y; ++y) {
+        for (int x = 0; x < w.size.x; ++x) {
+            Cell &cell = w.cells.at(y).at(x);
+
+            if (x == 0 || y == 0 || x + 1 == w.size.x || y + 1 == w.size.y) {
+                cell = {};
+                continue;
+            }
+
             auto fixup_power = [](Power &power) {
                 if (power.wires & WIRE_WHOLE)
                     power.wires = WIRE_WHOLE | WIRE_ALL_DIRECTIONS;
@@ -9,7 +16,6 @@ void map_fixup(World &w) {
                 power.power &= power.wires;
             };
 
-            Cell &cell = w.cells.at(y).at(x);
             if (cell.floor == FLOOR_VOID) {
                 cell.floor_power.wires &= WIRE_ALL_DIRECTIONS;
                 cell.floor_power.wires |= WIRE_WHOLE;
@@ -44,6 +50,49 @@ void handle_misc_input(World &w, IVec hover) {
     bool undoable = false;
 
     if (w.editor.on) {
+        if (IsKeyDown(KEY_LEFT_ALT) && IsKeyPressed(KEY_R)) {
+            w.clear_grid({10, 10});
+            undoable = true;
+        }
+        if (IsKeyDown(KEY_LEFT_ALT)) {
+            IVec new_size = w.size;
+            if (IsKeyPressed(KEY_LEFT))
+                new_size.x -= 1;
+            if (IsKeyPressed(KEY_RIGHT))
+                new_size.x += 1;
+            if (IsKeyPressed(KEY_UP))
+                new_size.y -= 1;
+            if (IsKeyPressed(KEY_DOWN))
+                new_size.y += 1;
+            new_size.x = std::max(new_size.x, 3);
+            new_size.y = std::max(new_size.y, 3);
+
+            if (new_size != w.size) {
+                w.cells.resize(std::max(w.size.y, new_size.y));
+                for (int y = 0; y < std::max(w.size.y, new_size.y); ++y) {
+                    w.cells.at(y).resize(std::max(w.size.x, new_size.x));
+                    for (int x = 0; x < std::max(w.size.x, new_size.x); ++x) {
+                        Cell &cell = w.cells.at(y).at(x);
+                        bool existed = x > 0 && y > 0 && x + 1 < w.size.x && y + 1 < w.size.y;
+                        bool will_exist = x > 0 && y > 0 && x + 1 < new_size.x && y + 1 < new_size.y;
+                        if (existed == will_exist)
+                            continue;
+                        if (will_exist) {
+                            cell.floor = FLOOR_PASSABLE;
+                        } else {
+                            if (cell.tile != -1)
+                                w.delete_tile(cell.tile);
+                            cell = {};
+                        }
+                    }
+                    w.cells.at(y).resize(new_size.x);
+                }
+                w.cells.resize(new_size.y);
+                w.size = new_size;
+                undoable = true;
+            }
+        }
+
         bool pipette = IsKeyPressed(KEY_Q);
         if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT) || pipette) {
             Vector2 p = GetScreenToWorld2D(GetMousePosition(), w.editor.palette_camera);
@@ -77,6 +126,8 @@ void handle_misc_input(World &w, IVec hover) {
             assert(cell.tile == -1);
             if (w.editor.held.type == EDITOR_FLOOR || cell.floor != FLOOR_PASSABLE || cell.floor_power.wires != WIRE_NONE) {
                 Cell floor = w.editor.held.type == EDITOR_FLOOR ? w.editor.held.floor : Cell {.floor = FLOOR_PASSABLE};
+                if (floor.floor == FLOOR_VOID)
+                    floor.floor_power.wires = WIRE_NONE;
                 if (cell.floor == FLOOR_VOID && floor.floor != FLOOR_VOID) {
                     auto fixup = [&](int dx, int dy, Wires wire) {
                         Cell &neighbor = w.cells.at(hover.y + dy).at(hover.x + dx);
@@ -87,6 +138,16 @@ void handle_misc_input(World &w, IVec hover) {
                     fixup(+1, 0, WIRE_LEFT);
                     fixup(0, -1, WIRE_DOWN);
                     fixup(0, +1, WIRE_UP);
+                }
+                if (floor.floor == FLOOR_WALL) {
+                    if (w.cells.at(hover.y).at(hover.x - 1).floor == FLOOR_WALL)
+                        floor.weld |= WALL_LEFT;
+                    if (w.cells.at(hover.y - 1).at(hover.x).floor == FLOOR_WALL)
+                        floor.weld |= WALL_UP;
+                    if (w.cells.at(hover.y).at(hover.x + 1).floor == FLOOR_WALL)
+                        w.cells.at(hover.y).at(hover.x + 1).weld |= WALL_LEFT;
+                    if (w.cells.at(hover.y + 1).at(hover.x).floor == FLOOR_WALL)
+                        w.cells.at(hover.y + 1).at(hover.x).weld |= WALL_UP;
                 }
                 cell = floor;
                 assert(cell.tile == -1);
@@ -116,6 +177,7 @@ void handle_misc_input(World &w, IVec hover) {
             Power &power = get_power(w.cells.at(hover.y).at(hover.x));
             power.wires ^= toggle_wires;
             power.power &= (power.wires & WIRE_CIRCLE);
+            power.anim = {};
             undoable = true;
         }
 
@@ -143,17 +205,25 @@ void handle_misc_input(World &w, IVec hover) {
 
         map_fixup(w);
 
+        if (undoable)
+            w.num_static_vertices = -1;
+
         if (IsKeyPressed(KEY_F5))
             w.save_to_file();
         if (IsKeyPressed(KEY_F9)) {
             w.load_from_file();
             undoable = true;
         }
+    } else {
+        if (IsMouseButtonDown(MOUSE_BUTTON_RIGHT))
+            w.render.skew += GetMouseDelta() * 1e-3;
+        else
+            w.render.skew = default_skew;
     }
 
     if (w.undo_repeat.check({KEY_Z}) && w.undo_idx > 1) {
         w.undo_idx -= 1;
-        w.load(w.undo.at(w.undo_idx - 1));
+        w.load(w.undo.at(w.undo_idx - 1), true);
 
         // (This is a probably unreliable, I haven't thought through how this interacts with everything else.)
         if (w.recording_active != -1 && !w.recordings.at(w.recording_active).empty())
@@ -161,7 +231,7 @@ void handle_misc_input(World &w, IVec hover) {
     }
     if (w.redo_repeat.check({KEY_X}) && w.undo_idx < w.undo.size() && w.recording_active == -1) {
         w.undo_idx += 1;
-        w.load(w.undo.at(w.undo_idx - 1));
+        w.load(w.undo.at(w.undo_idx - 1), true);
     }
 
     for (int i = 0; i < 10; ++i) {
@@ -270,9 +340,11 @@ std::vector<int> find_welded_tile_group(World &w, int ti) {
 }
 
 bool select_tile(World &w, IVec pos) {
+    Cell &cell = w.cells.at(pos.y).at(pos.x);
+    if (cell.tile != -1 && w.tiles.at(cell.tile).selected)
+        return true; // keep all selected tiles selected
     for (Tile &tile : w.tiles)
         tile.selected = false;
-    Cell &cell = w.cells.at(pos.y).at(pos.x);
     if (cell.tile == -1)
         return false;
     std::vector<int> tiles = find_welded_tile_group(w, cell.tile);
@@ -282,7 +354,7 @@ bool select_tile(World &w, IVec pos) {
     return true;
 }
 
-bool move_start(World &w, Direction dir) {
+bool move_start(World &w, Direction dir, int required_tile) {
     assert(w.move.stage == STAGE_NONE);
     bool any_moving = false;
     for (int ti0 = 0; ti0 < w.tiles.size(); ++ti0) {
@@ -328,6 +400,11 @@ bool move_start(World &w, Direction dir) {
     }
     if (!any_moving)
         return false;
+    if (required_tile != -1 && !w.tiles.at(required_tile).moving) {
+        for (Tile &tile: w.tiles)
+            tile.moving = false;
+        return false;
+    }
 
     w.move.elapsed = 0;
     w.move.stage = STAGE_FIRST_HALF;
@@ -402,7 +479,7 @@ void update_barriers_and_perform_cuts(World &w) {
                     assert(std::binary_search(seen.begin(), seen.end(), std::make_pair(pos, (Direction)dir)));
             }
         }
-        }*/
+    }*/
 }
 
 bool move_advance_if_needed(World &w) {
@@ -492,6 +569,7 @@ void update(World &w) {
         w.animation_rate = std::max(w.animation_rate, new_animation_rate);
     else
         w.animation_rate = new_animation_rate;
+    w.animation_delta = w.animation_rate * GetFrameTime();
 
     if (IsKeyPressed(KEY_F10))
         w.editor.on ^= 1;
@@ -499,6 +577,13 @@ void update(World &w) {
         w.editor.layout();
     if (w.move.stage == STAGE_NONE)
         handle_misc_input(w, hover);
+
+    if (IsKeyDown(KEY_LEFT_ALT)) {
+        if (IsKeyPressed(KEY_LEFT_BRACKET))
+            w.debug_fudge_parameter -= 1;
+        if (IsKeyPressed(KEY_RIGHT_BRACKET))
+            w.debug_fudge_parameter += 1;
+    }
 
     if (IsKeyPressed(KEY_LEFT_BRACKET)) {
         if (w.move.manual_advance == -1)
@@ -530,7 +615,7 @@ void update(World &w) {
                 dequeue = false;
             }
         } else if (action.type == ACTION_MOVE) {
-            acted = move_start(w, action.dir);
+            acted = move_start(w, action.dir, -1);
         } else if (action.type == ACTION_DRAG && w.dragging_tile != -1) {
             IVec d = action.pos - w.tiles.at(w.dragging_tile).pos;
             std::array<int, 2> dirs {-1, -1};
@@ -546,7 +631,7 @@ void update(World &w) {
 
                 action.type = ACTION_MOVE;
                 action.dir = (Direction)dir;
-                acted = move_start(w, action.dir);
+                acted = move_start(w, action.dir, w.dragging_tile);
                 if (acted)
                     break;
             }
@@ -559,7 +644,7 @@ void update(World &w) {
     }
 
     if (w.move.stage != STAGE_NONE && w.move.manual_advance == -1)
-        w.move.elapsed = std::min(1.f, w.move.elapsed + w.animation_rate * GetFrameTime());
+        w.move.elapsed = std::min(1.f, w.move.elapsed + w.animation_delta);
     bool updated_power = false;
     while (move_advance_if_needed(w)) {
         update_power(w);

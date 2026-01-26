@@ -1,3 +1,5 @@
+#include "rlgl.h"
+
 const char *vertex_shader = R"(
 #version 330
 
@@ -6,215 +8,233 @@ in vec2 vertexTexCoord;
 in vec3 vertexNormal;
 in vec4 vertexColor;
 
-in mat4 instanceTransform;
+in mat4 instanceTransform; // last row contains info about the tile, not part of the transform
 
 uniform mat4 mvp;
-uniform float asdqwe=0.;
 
-out vec2 fragTexCoord;
+// colorMode.w:
+// -1 - use vertex colors
+// -2 - use tile color for tile type unpacked from instanceTransform
+//  0 - use texture
+// otherwise use this color
+uniform vec4 colorMode;
+
+uniform vec2 skew = vec2(-.35, -.35);
+uniform float adjustZ = 0.;
+
+out vec3 fragPosition;
+out vec3 fragNormal;
 out vec4 fragColor;
+out vec2 fragWireTextureOffset0;
+out vec2 fragWireTextureOffset1;
+out float fragPowerAnim;
+out vec2 fragTexCoord;
+out float fragTileInfo;
+out float fragPowered;
+
+const mat2 dir_rot[4] = mat2[4](
+    mat2(1, 0, 0, 1),
+    mat2(0, 1, -1, 0),
+    mat2(-1, 0, 0, -1),
+    mat2(0, -1, 1, 0));
+const vec4 tile_colors[8] = vec4[8](
+    vec4(105., 152., 88., 255.) / 255.,
+    vec4(206., 183., 111., 255.) / 255.,
+    vec4(86., 126., 160., 255.) / 255.,
+    vec4(129., 104., 158., 255.) / 255.,
+    vec4(176., 121., 49., 255.) / 255.,
+    vec4(172., 71., 71., 255.) / 255.,
+    vec4(97., 97., 97., 255.) / 255.,
+    vec4(47., 47., 47., 255.) / 255.);
+
+vec2 get_wire_texture_offset(float wire_texture_idx) {
+    return vec2(mod(wire_texture_idx / 10., 1.), 1. - floor(wire_texture_idx / 10. + 1) / 10.);
+}
+float is_powered(float wire_texture_idx) {
+    return (wire_texture_idx >= 32. && wire_texture_idx != 67.) ? 1. : 0.;
+}
 
 void main()
 {
-    fragTexCoord = vertexTexCoord;
-    fragColor = vertexColor;
+    // Unpack information from that we hacked into the one instance info matrix that raylib propagates.
+    float wire_texture_idx_0 = mod(instanceTransform[0][3], 128.);
+    float wire_texture_idx_1 = floor(instanceTransform[0][3] / 128.);
+    float power_anim = instanceTransform[1][3];
+    float pre_rotation = instanceTransform[2][3];
+    float tile_info = instanceTransform[3][3];
+    mat4 unpacked_transform = instanceTransform;
+    unpacked_transform[0][3] = 0.;
+    unpacked_transform[1][3] = 0.;
+    unpacked_transform[2][3] = 0.;
+    unpacked_transform[3][3] = 1.;
 
-    vec4 p1 = mvp*instanceTransform*vec4(vertexPosition, 1.0);
-    vec4 p2 = vec4(vertexPosition, 1.0);
-    gl_Position = p1*asdqwe+p2*(1.-asdqwe);
+    vec3 pos = vertexPosition;
+
+    // Blow up the model a tiny bit to hopefully get rid of pixel gaps between tiles
+    vec3 center = vec3(.25, .15, -.25);
+    pos = (pos - center) * 1.00001 + center;
+
+    // If this instance is a quarter of a tile, rotate the quarter mesh (that spans xy [0, .5]) into the correct quarter of the tile square (xy [-.5, .5]).
+    // We can't just include this in instanceTransform matrix because it must apply to wire texture coordinates (fragPosition).
+    mat2 pretransform = dir_rot[int(pre_rotation)];
+    pos.xz = pretransform * pos.xz;
+    vec3 pretransformed_normal = vertexNormal;
+    pretransformed_normal.xz = pretransform * pretransformed_normal.xz;
+
+    fragPosition = pos;
+    fragNormal = pretransformed_normal;
+    if (colorMode.x == -1)
+        fragColor = vertexColor;
+    else if (colorMode.x == -2)
+        fragColor = tile_colors[int(tile_info)];
+    else
+        fragColor = colorMode;
+    fragWireTextureOffset0 = get_wire_texture_offset(wire_texture_idx_0);
+    fragWireTextureOffset1 = get_wire_texture_offset(wire_texture_idx_1);
+    fragPowerAnim = power_anim;
+    fragPowered = mix(is_powered(wire_texture_idx_0), is_powered(wire_texture_idx_1), power_anim);
+
+    fragTexCoord = vertexTexCoord;
+
+    vec4 p = unpacked_transform*vec4(pos, 1.0);
+    p.xz += p.y*skew;
+    fragPosition.y = p.y;
+    p.y += adjustZ;
+    gl_Position = mvp*p;
 }
 )";
 
 const char *fragment_shader = R"(
 #version 330
 
-in vec2 fragTexCoord;
+in vec3 fragPosition; // [-.5, .5]
+in vec3 fragNormal;
 in vec4 fragColor;
+in vec2 fragWireTextureOffset0;
+in vec2 fragWireTextureOffset1;
+in float fragPowerAnim;
+in vec2 fragTexCoord;
+in float fragTileInfo;
+in float fragPowered;
 
 uniform sampler2D texture0;
-uniform vec4 colDiffuse;
+uniform sampler2D texture1;
+
+uniform vec3 lightDirection;
+uniform float whichMesh;
 
 out vec4 finalColor;
 
+const float MESH_FLOOR = 27.;
+const float MESH_BLACK_TILE_QUARTER_0 = 16.;
+const float MESH_BARRIER = 26.;
+
 void main()
 {
-    //vec4 texelColor = texture(texture0, fragTexCoord);
-    //finalColor = texelColor*colDiffuse*fragColor;
-    finalColor = vec4(1.,0.,1.,1.);
+    vec4 color = vec4(fragPowered, fragPowered, fragPowered, 1.);
+    vec4 texel = texture(texture1, fragTexCoord);
+    color.xyz = mix(color.xyz, texel.xyz, texel.w);
+    color.xyz = mix(color.xyz, fragColor.xyz, fragColor.w);
+    if (whichMesh == MESH_FLOOR) {
+        const float thickness = .14 * .5;
+        vec2 t = abs(abs(fragPosition.xz) - .5);
+        float f = step(thickness*.5, min(t.x, t.y));
+        color = vec4(.256, .256, .256, 1.) * f + vec4(.288, .288, .288, 1.) * (1. - f);
+    }
+    float light = clamp(-dot(lightDirection, normalize(fragNormal)), 0., 1.);
+    vec2 wire_tex_coord_0 = fragWireTextureOffset0 + clamp(fragPosition.xz + .5, 1./200, 1.-1./200) / 10.;
+    vec2 wire_tex_coord_1 = fragWireTextureOffset1 + clamp(fragPosition.xz + .5, 1./200, 1.-1./200) / 10.;
+    vec4 wire_texel = mix(texture(texture0, wire_tex_coord_0), texture(texture0, wire_tex_coord_1), fragPowerAnim);
+    if (whichMesh >= MESH_BLACK_TILE_QUARTER_0 && whichMesh <= MESH_BLACK_TILE_QUARTER_0 + 7) {
+        finalColor = color;
+    } else if (whichMesh == MESH_BARRIER) {
+        float h = mix(mix(.015, .206, clamp(fragPosition.y / .373, 0., 1.)), .665, clamp((fragPosition.y - .373) / (1. - .373), 0., 1.));
+        finalColor = vec4(mix(color.xyz * light, vec3(h, h, h), .5), 1.);
+    } else {
+        finalColor = vec4(mix(color.xyz * light, wire_texel.xyz, wire_texel.w), 1.);
+    }
 }
 )";
 
+Mesh alloc_mesh(int vertex_count, int triangle_count) {
+    return Mesh {
+        .vertexCount = vertex_count, .triangleCount = triangle_count,
+        .vertices = (float*)RL_CALLOC(vertex_count, sizeof(Vector3)),
+        .texcoords = (float*)RL_CALLOC(vertex_count, sizeof(Vector2)),
+        .normals = (float*)RL_CALLOC(vertex_count, sizeof(Vector3)),
+        .colors = (unsigned char*)RL_CALLOC(vertex_count, sizeof(Color)),
+        .indices = (unsigned short*)RL_CALLOC(triangle_count, 3*sizeof(short))};
+}
+void set_mesh_verts(Mesh &mesh, int idx, std::initializer_list<Vector3> il) {
+    for (Vector3 v: il) {
+        assert(idx < mesh.vertexCount);
+        memcpy(mesh.vertices + idx*3, &v, sizeof(Vector3));
+        idx += 1;
+    }
+}
+void set_mesh_normals(Mesh &mesh, int idx, std::initializer_list<Vector3> il) {
+    for (Vector3 v: il) {
+        assert(idx < mesh.vertexCount);
+        memcpy(mesh.normals + idx*3, &v, sizeof(Vector3));
+        idx += 1;
+    }
+}
+void set_mesh_indices(Mesh &mesh, int idx, std::initializer_list<unsigned short> il) {
+    for (unsigned short v: il) {
+        assert(idx < mesh.triangleCount*3);
+        mesh.indices[idx] = v;
+        idx += 1;
+    }
+}
+
+void load_assets(World &w) {
+    w.render.material.maps[0].texture = LoadTexture("assets/wires.png");
+    w.render.material.maps[1].texture = LoadTexture("assets/walls.png");
+    GenTextureMipmaps(&w.render.material.maps[0].texture);
+    GenTextureMipmaps(&w.render.material.maps[1].texture);
+
+    Model m = LoadModel("assets/tiles.glb");
+    assert(m.meshCount == 27);
+    for (int i = 0; i < 27; ++i) {
+        w.render.meshes[i].mesh = m.meshes[i];
+    }
+}
+
 void render_init(World &w) {
     w.render.material = LoadMaterialDefault();
-    //asdqwe w.render.material.maps[0].texture = LoadTexture("wires.png");
     w.render.material.shader = LoadShaderFromMemory(vertex_shader, fragment_shader);
+    w.render.material.shader.locs[SHADER_LOC_MATRIX_MODEL] = GetShaderLocationAttrib(w.render.material.shader, "instanceTransform");
 
-    //asdqwe w.render.meshes[MESH_FLOOR].mesh = GenMeshPlane(1., 1., 1, 1);
-    w.render.meshes[MESH_FLOOR].mesh = GenMeshCube(1, 1, 1);
-}
-
-/*void draw_power(const Power power, Vector2 pos) {
-    const float outer_radius = 20./70;
-    const float thickness = 8./70;
-    const float crossing_outer_gap = 4./70;
-    const float crossing_inner_gap = 10./70;
-    const Color colors[2] = {WHITE, BLACK};
-    int wires = power.wires;
-    if (wires & WIRE_WHOLE) {
-        DrawRectangleV(pos, {1.f, 1.f}, colors[!power.power]);
-        wires = WIRE_NONE;
-    }
-    float offset = 0;
-    if (wires & (WIRE_CIRCLE | WIRE_BRIDGE)) {
-        // Circle or semicircle.
-        bool bridge = wires & WIRE_BRIDGE;
-        DrawRing(pos + Vector2{.5f, .5f}, outer_radius - thickness, outer_radius, bridge ? 180 : 0, 360, 30, colors[!(power.power & (WIRE_CIRCLE | WIRE_LEFT | WIRE_RIGHT))]);
-        offset = outer_radius - thickness/2;
-
-        if (bridge) {
-            // Rounded corners.
-            DrawCircleV({pos.x + .5f - offset, pos.y + .5f}, thickness * .5f, colors[!(power.power & WIRE_LEFT)]);
-            DrawCircleV({pos.x + .5f + offset, pos.y + .5f}, thickness * .5f, colors[!(power.power & WIRE_LEFT)]);
-            // Up.
-            DrawRectangleV({pos.x + .5f - thickness * .5f, pos.y}, {thickness, .5f - outer_radius - crossing_outer_gap}, colors[!(power.power & WIRE_UP)]);
-            // Down.
-            float t = outer_radius - thickness - crossing_inner_gap;
-            DrawRectangleV({pos.x + .5f - thickness * .5f, pos.y + .5f - t}, {thickness, .5f + t}, colors[!(power.power & WIRE_DOWN)]);
-            // Rounded tip.
-            DrawCircleV({pos.x + .5f, pos.y + .5f - t}, thickness * .5f, colors[!(power.power & WIRE_DOWN)]);
-            wires &= WIRE_LEFT | WIRE_RIGHT;
+    {
+        Mesh m = alloc_mesh(4, 2);
+        set_mesh_verts(m, 0, {{0, 0, -.5}, {0, 0, 0}, {.5, 0, 0}, {.5, 0, -.5}});
+        for (int i = 0; i < m.vertexCount * 3; ++i) {
+            float &v = m.vertices[i];
+            if (v < 0)
+                v -= 1e-5;
+            if (v > 0)
+                v += 1e-5;
         }
-    }
-    if (wires & WIRE_LEFT)
-        DrawRectangleV({pos.x, pos.y + .5f - thickness * .5f}, {.5f - offset, thickness}, colors[!(power.power & WIRE_LEFT)]);
-    if (wires & WIRE_RIGHT)
-        DrawRectangleV({pos.x + .5f + offset, pos.y + .5f - thickness * .5f}, {.5f - offset, thickness}, colors[!(power.power & WIRE_RIGHT)]);
-    if (wires & WIRE_UP)
-        DrawRectangleV({pos.x + .5f - thickness * .5f, pos.y}, {thickness, .5f - offset}, colors[!(power.power & WIRE_UP)]);
-    if (wires & WIRE_DOWN)
-        DrawRectangleV({pos.x + .5f - thickness * .5f, pos.y + .5f + offset}, {thickness, .5f - offset}, colors[!(power.power & WIRE_DOWN)]);
-    // Rounded corner.
-    if ((wires & WIRE_ALL_DIRECTIONS) && offset == 0 && ((~wires) & (WIRE_LEFT | WIRE_RIGHT)) && ((~wires) & (WIRE_UP | WIRE_DOWN)))
-        DrawCircleV(pos + Vector2{.5f, .5f}, thickness * .5f, colors[!(power.power & WIRE_ALL_DIRECTIONS)]);
-}
-
-void draw_floor(const std::vector<std::vector<Cell>> &cells, IVec idx, Vector2 pos) {
-    const Cell &cell = cells.at(idx.y).at(idx.x);
-    DrawRectangleV(pos, {1.f, 1.f}, {73, 73, 73, 255});
-    if (cell.floor == FLOOR_PASSABLE) {
-        const float gap = 5./70;
-        DrawRectangleV({pos.x + gap * .5f, pos.y + gap * .5f}, {1.f - gap, 1.f - gap}, {65, 65, 65, 255});
-    } else if (cell.floor == FLOOR_WALL) {
-        const float margin = .04;
-        Vector2 p = pos;
-        Vector2 q = pos + Vector2{1.f, 1.f};
-        if (!(cell.weld & WALL_LEFT)) p.x += margin;
-        if (!(cell.weld & WALL_UP)) p.y += margin;
-        if (!(cells.at(idx.y).at(idx.x + 1).weld & WALL_LEFT)) q.x -= margin;
-        if (!(cells.at(idx.y + 1).at(idx.x).weld & WALL_UP)) q.y -= margin;
-        DrawRectangleV(p, q - p, {47, 47, 47, 255});
-    } else if (cell.floor == FLOOR_TRIGGER) {
-        DrawRectangleV(pos + Vector2{.1f, .1f}, {.8f, .8f}, {104, 104, 104, 255});
-        DrawRectangleV(pos + Vector2{.2f, .2f}, {.6f, .6f}, {72, 72, 72, 255});
-        DrawRectangleV(pos + Vector2{.3f, .3f}, {.4f, .4f}, {104, 104, 104, 255});
-        if ((cells.at(idx.y - 1).at(idx.x).barrier & WALL_LEFT) || (cells.at(idx.y).at(idx.x - 1).barrier & WALL_UP))
-            DrawRectangleV(pos, {.2f, .2f}, {190, 190, 190, 255});
-        if ((cells.at(idx.y - 1).at(idx.x + 1).barrier & WALL_LEFT) || (cells.at(idx.y).at(idx.x + 1).barrier & WALL_UP))
-            DrawRectangleV({pos.x + .8f, pos.y}, {.2f, .2f}, {190, 190, 190, 255});
-        if ((cells.at(idx.y + 1).at(idx.x).barrier & WALL_LEFT) || (cells.at(idx.y + 1).at(idx.x - 1).barrier & WALL_UP))
-            DrawRectangleV({pos.x, pos.y + .8f}, {.2f, .2f}, {190, 190, 190, 255});
-        if ((cells.at(idx.y + 1).at(idx.x + 1).barrier & WALL_LEFT) || (cells.at(idx.y + 1).at(idx.x + 1).barrier & WALL_UP))
-            DrawRectangleV({pos.x + .8f, pos.y + .8f}, {.2f, .2f}, {190, 190, 190, 255});
+        set_mesh_normals(m, 0, {{0, 1, 0}, {0, 1, 0}, {0, 1, 0}, {0, 1, 0}});
+        set_mesh_indices(m, 0, {0,1,2,  2,3,0});
+        UploadMesh(&m, false);
+        w.render.meshes[MESH_FLOOR].mesh = m;
     }
 
-    draw_power(cell.floor_power, pos);
+    for (int i = MESH_TILE_QUARTER_0; i <= MESH_TILE_QUARTER_7; ++i)
+        w.render.meshes[i].color_mode = {-2, -2, -2, -2};
+    for (int i = MESH_VOID_QUARTER_0; i <= MESH_TRIGGER_CORNER; ++i)
+        w.render.meshes[i].color_mode = {0, 0, 0, 0};
+    w.render.meshes[MESH_BARRIER].color_mode = {1., 1., 1., 1.};
 
-    if (cell.floor == FLOOR_VOID) {
-        const float margin = 10./70;
-        const Color outer = {172, 172, 172, 255};
-        const Color inner = {0, 0, 0, 0};
-        if (cells.at(idx.y).at(idx.x - 1).floor != FLOOR_VOID)
-            DrawRectangleGradientEx({pos.x, pos.y, margin, 1.f}, outer, outer, inner, inner);
-        if (cells.at(idx.y - 1).at(idx.x).floor != FLOOR_VOID)
-            DrawRectangleGradientEx({pos.x, pos.y, 1.f, margin}, outer, inner, inner, outer);
-        if (cells.at(idx.y).at(idx.x + 1).floor != FLOOR_VOID)
-            DrawRectangleGradientEx({pos.x + 1.f - margin, pos.y, margin, 1.f}, inner, inner, outer, outer);
-        if (cells.at(idx.y + 1).at(idx.x).floor != FLOOR_VOID)
-            DrawRectangleGradientEx({pos.x, pos.y + 1.f - margin, 1.f, margin}, inner, outer, outer, inner);
-
-        uint8_t wall_wires = cell.floor_power.wires & WIRE_ALL_DIRECTIONS;
-        if (wall_wires)
-            draw_power({.wires = wall_wires, .power = (uint8_t)(cell.floor_power.power & wall_wires)}, pos);
-    }
-
-    if (cell.barrier) {
-        const float thickness = 8./70;
-        const Color col {120, 80, 120, 255};
-        const int segments = 8;
-        if (cell.barrier & WALL_LEFT) {
-            if (cell.barrier_active & WALL_LEFT) {
-                DrawRectangleV({pos.x - thickness * .5f, pos.y}, {thickness, 1.f}, col);
-            } else {
-                for (int i = 0; i < segments; i += 2)
-                    DrawRectangleV({pos.x - thickness * .5f, pos.y + (float)i / (float)segments}, {thickness, 1.f / (float)segments}, col);
-            }
-        }
-        if (cell.barrier & WALL_UP) {
-            if (cell.barrier_active & WALL_UP) {
-                DrawRectangleV({pos.x, pos.y - thickness * .5f}, {1.f, thickness}, col);
-            } else {
-                for (int i = 0; i < segments; i += 2)
-                    DrawRectangleV({pos.x + (float)i / (float)segments, pos.y - thickness * .5f}, {1.f / (float)segments, thickness}, col);
-            }
-        }
-    }
-}
-
-void draw_tile(const Tile &tile, int weld, Vector2 pos) {
-    if (tile.type != TILE_BLACK) {
-        Color col = PINK;
-        switch (tile.type) {
-        case TILE_GREEN: col = {105, 152, 88, 255}; break;
-        case TILE_YELLOW: col = {206, 183, 111, 255}; break;
-        case TILE_BLUE: col = {86, 126, 160, 255}; break;
-        case TILE_PURPLE: col = {129, 104, 158, 255}; break;
-        case TILE_ORANGE: col = {176, 121, 49, 255}; break;
-        case TILE_RED: col = {172, 71, 71, 255}; break;
-        case TILE_GRAY: col = {97, 97, 97, 255}; break;
-        case TILE_BLACK: assert(false);
-        }
-
-        const float margin = .04;
-        Vector2 p = pos;
-        Vector2 q = pos + Vector2{1.f, 1.f};
-        if (!(weld & WALL_LEFT)) p.x += margin;
-        if (!(weld & WALL_UP)) p.y += margin;
-        if (!(weld & WALL_RIGHT)) q.x -= margin;
-        if (!(weld & WALL_DOWN)) q.y -= margin;
-        DrawRectangleV(p, q - p, col);
-    }
-
-    draw_power(tile.power, pos);
-
-    if (tile.type == TILE_BLACK) {
-        const float thickness = 3./70;
-        const Color col = {109, 109, 109, 255};
-        if (!(weld & WALL_LEFT))
-            DrawRectangleV(pos, {thickness, 1.f}, col);
-        if (!(weld & WALL_UP))
-            DrawRectangleV(pos, {1.f, thickness}, col);
-        if (!(weld & WALL_RIGHT))
-            DrawRectangleV({pos.x + 1.f - thickness, pos.y}, {thickness, 1.f}, col);
-        if (!(weld & WALL_DOWN))
-            DrawRectangleV({pos.x, pos.y + 1.f - thickness}, {1.f, thickness}, col);
-    }
+    load_assets(w);
 }
 
 void draw_selection_indicator(const World &w) {
     const float thickness = 0.07;
     const float length = 0.2;
     const float gap = 0.04 + 0.02 * sin(GetTime() * 3.);
-    const Color col = WHITE;
+    const Color col {192, 192, 192, 255};
 
     auto have_selected_tile_at = [&](IVec p) {
         int ti = w.get_cell(p).tile;
@@ -257,37 +277,230 @@ void draw_selection_indicator(const World &w) {
                     t = 1 - t;
                 corner_pos += dir_vec[w.move.dir] * t;
             }
+            corner_pos += Vector2{-.05, -.05};
             for (Vector2 &p : points)
                 p += corner_pos;
-            DrawTriangleFan(&points[0], 6, col);
+            //DrawTriangleFan(&points[0], 6, col);
+
+            for (int i = 1; i + 1 < 6; ++i) {
+                DrawTriangle3D({points[0].x, .8, points[0].y}, {points[i].x, .8, points[i].y}, {points[i + 1].x, .8, points[i + 1].y}, col);
+            }
         }
     }
-    }*/
+}
+
+Camera3D make_camera_3d(Camera2D camera, float absolute_zoom) {
+    Vector2 target = camera.target;
+    target += GetScreenToWorld2D({GetRenderWidth() * .5f, GetRenderHeight() * .5f}, camera) - GetScreenToWorld2D(camera.offset, camera);
+    return {.position = {target.x, 100, target.y}, .target = {target.x, 90, target.y}, .up = {0, 0, -1}, .fovy = 2.f / absolute_zoom, .projection = CAMERA_ORTHOGRAPHIC};
+}
+
+int get_wire_texture_idx(const World &w, const Power &power, bool is_void) {
+    if (power.wires & WIRE_BRIDGE)
+        return 63 + ((power.power & WIRE_LEFT) ? 1 : 0) + ((power.power & WIRE_UP) ? 2 : 0);
+    if ((power.wires & WIRE_WHOLE) && !is_void)
+        return 67 + ((power.power & WIRE_UP) ? 1 : 0);
+
+    int idx = (power.wires & (WIRE_UP | WIRE_DOWN)) | ((power.wires & 1) << 2) | ((power.wires & 4) >> 2);
+    if (power.wires & WIRE_CIRCLE)
+        idx += 16;
+    if (power.power)
+        idx += 31;
+    return idx;
+}
+
+void update_power_anim(const World &w, Power &power, bool is_void) {
+    int idx = get_wire_texture_idx(w, power, is_void);
+    if (idx != power.anim.wire_texture_idx[1]) {
+        if (idx == power.anim.wire_texture_idx[0]) {
+            power.anim.wire_texture_idx[0] = power.anim.wire_texture_idx[1];
+            power.anim.anim = 1 - power.anim.anim;
+        } else if (power.anim.wire_texture_idx[1] == -1) {
+            power.anim.wire_texture_idx[0] = power.anim.wire_texture_idx[1] = idx;
+            power.anim.anim = 1;
+        } else {
+            power.anim.wire_texture_idx[0] = power.anim.wire_texture_idx[1];
+            power.anim.anim = 0;
+        }
+        power.anim.wire_texture_idx[1] = idx;
+    }
+    power.anim.anim = Clamp(power.anim.anim + w.animation_delta * w.power_animation_rate, 0, 1);
+}
+
+int get_weld_mask(const World &w, IVec pos, int dir, bool is_tile, bool is_editor) {
+    if (is_editor)
+        return 0;
+    int d0 = dir_opposite(dir);
+    int d1 = (dir + 1) & 3;
+    int weld_mask = has_weld(w, pos, d0, is_tile) | ((int)has_weld(w, pos, d1, is_tile) << 1);
+    if (((weld_mask & 1) && has_weld(w, pos + dir_vec[d0], d1, is_tile)) || ((weld_mask & 2) && has_weld(w, pos + dir_vec[d1], d0, is_tile)))
+        weld_mask |= 4;
+    return weld_mask;
+}
+
+void draw_under_floor(World &w, IVec pos, const Cell &cell, const Matrix &transform, PowerAnim power, bool is_editor) {
+    for (int dir = 0; dir < 4; ++dir) {
+        Instance floor_instance {.transform = transform, .power = power, .pre_rotation = (Direction)dir};
+        if (!is_editor && cell.floor == FLOOR_WALL) {
+            // Cover up the corner case (pun intended) where a wall's rounded corner stands in the middle of conductive floor and exposes a tiny patch of non-conductive floor under it.
+            // This is the only reason we split the FLOOR_PASSABLE floor tile into quarters.
+            bool ok = true;
+            auto is_conductive_floor = [&](const Cell &cell2) {
+                return cell2.floor == FLOOR_PASSABLE && (cell2.floor_power.wires & WIRE_WHOLE);
+            };
+            PowerAnim neighbor_power;
+            int conductive_neighbors = 0;
+            std::array<int, 2> dirs {dir_opposite(dir), dir_clockwise(dir)};
+            for (int d: dirs) {
+                ok &= !has_weld(w, pos, d, false);
+                const Cell &cell2 = w.get_cell(pos + dir_vec[d]);
+                if (is_conductive_floor(cell2)) {
+                    neighbor_power = cell2.floor_power.anim;
+                    conductive_neighbors += 1;
+                }
+            }
+            if (ok && conductive_neighbors > 0 && (conductive_neighbors == 1 || is_conductive_floor(w.get_cell(pos + dir_vec[dirs[0]] + dir_vec[dirs[1]])))) {
+                floor_instance.power = neighbor_power;
+            }
+        }
+        w.render.meshes.at(MESH_FLOOR).instances.push_back(floor_instance);
+    }
+}
+
+int get_void_mask(const World &w, IVec pos, bool is_editor) {
+    int void_mask = 0;
+    if (!is_editor) {
+        if (w.cells.at(pos.y).at(pos.x - 1).floor == FLOOR_VOID)
+            void_mask |= 1 << DIR_LEFT;
+        if (w.cells.at(pos.y).at(pos.x + 1).floor == FLOOR_VOID)
+            void_mask |= 1 << DIR_RIGHT;
+        if (w.cells.at(pos.y - 1).at(pos.x).floor == FLOOR_VOID)
+            void_mask |= 1 << DIR_UP;
+        if (w.cells.at(pos.y + 1).at(pos.x).floor == FLOOR_VOID)
+            void_mask |= 1 << DIR_DOWN;
+    }
+    return void_mask;
+}
+
+void draw_floor(World &w, IVec pos, const Cell &cell, const Matrix &transform, PowerAnim power, bool is_editor) {
+    if (cell.floor == FLOOR_WALL) {
+        for (int dir = 0; dir < 4; ++dir) {
+            MeshState &mesh = w.render.meshes.at(MESH_TILE_QUARTER_0 + get_weld_mask(w, pos, dir, false, is_editor));
+            mesh.instances.push_back({.transform = transform, .power = power, .pre_rotation = (Direction)dir, .tile_info = TILE_BLACK});
+        }
+    } else if (cell.floor == FLOOR_TRIGGER) {
+        w.render.meshes.at(MESH_TRIGGER).instances.push_back({.transform = transform, .power = power, .pre_rotation = DIR_UP});
+        if (!is_editor) {
+            auto add_corner = [&](Direction dir) {
+                w.render.meshes.at(MESH_TRIGGER_CORNER).instances.push_back({.transform = transform, .pre_rotation = dir});
+            };
+            if ((w.cells.at(pos.y - 1).at(pos.x).barrier & WALL_LEFT) || (w.cells.at(pos.y).at(pos.x - 1).barrier & WALL_UP))
+                add_corner(DIR_DOWN);
+            if ((w.cells.at(pos.y - 1).at(pos.x + 1).barrier & WALL_LEFT) || (w.cells.at(pos.y).at(pos.x + 1).barrier & WALL_UP))
+                add_corner(DIR_LEFT);
+            if ((w.cells.at(pos.y + 1).at(pos.x).barrier & WALL_LEFT) || (w.cells.at(pos.y + 1).at(pos.x - 1).barrier & WALL_UP))
+                add_corner(DIR_RIGHT);
+            if ((w.cells.at(pos.y + 1).at(pos.x + 1).barrier & WALL_LEFT) || (w.cells.at(pos.y + 1).at(pos.x + 1).barrier & WALL_UP))
+                add_corner(DIR_UP);
+        }
+    } else if (cell.floor == FLOOR_VOID) {
+        int void_mask = get_void_mask(w, pos, is_editor);
+        for (int dir = 0; dir < 4; ++dir) {
+            int d0 = dir_opposite(dir);
+            int d1 = (dir + 1) & 3;
+            int weld_mask = 0;
+            if (!is_editor)
+                weld_mask = ((void_mask >> dir_opposite(dir)) & 1) | (((void_mask >> d1) & 1) << 1) | ((w.get_cell(pos + dir_vec[d0] + dir_vec[d1]).floor == FLOOR_VOID) << 2);
+            MeshState &mesh = w.render.meshes.at(MESH_VOID_QUARTER_0 + weld_mask);
+            mesh.instances.push_back({.transform = transform, .power = power, .pre_rotation = (Direction)dir});
+        }
+    }
+}
+
+void draw_tile(World &w, IVec pos, const Tile &tile, Matrix transform, bool is_editor) {
+    if (!is_editor && tile.moving) {
+        float t = w.move.elapsed;
+        if (w.move.stage == STAGE_SECOND_HALF)
+            t = 1 - t;
+        Vector2 v = pos.to_float() + Vector2(.5f, .5f) + dir_vec[w.move.dir].to_float() * t;
+        transform = MatrixTranslate(v.x, 0, v.y);
+    }
+    for (int dir = 0; dir < 4; ++dir) {
+        MeshState &mesh = w.render.meshes.at((tile.type == TILE_BLACK ? MESH_BLACK_TILE_QUARTER_0 : MESH_TILE_QUARTER_0) + get_weld_mask(w, pos, dir, true, is_editor));
+        mesh.instances.push_back({.transform = transform, .power = tile.power.anim, .pre_rotation = (Direction)dir, .tile_info = (float)tile.type});
+    }
+}
+
+void render_instances(World &w, float adjust_z = 0) {
+    BeginShaderMode(w.render.material.shader);
+
+    Vector3 light_direction{-.25, -1, -.45};
+    SetShaderValue(w.render.material.shader, GetShaderLocation(w.render.material.shader, "lightDirection"), &light_direction, SHADER_UNIFORM_VEC3);
+    SetShaderValue(w.render.material.shader, GetShaderLocation(w.render.material.shader, "skew"), &w.render.skew, SHADER_UNIFORM_VEC2);
+    SetShaderValue(w.render.material.shader, GetShaderLocation(w.render.material.shader, "adjustZ"), &adjust_z, SHADER_UNIFORM_FLOAT);
+
+    std::vector<Matrix> transforms;
+    for (int mesh_idx = 0; mesh_idx < w.render.meshes.size(); ++mesh_idx) {
+        MeshState &mesh = w.render.meshes[mesh_idx];
+        if (mesh.instances.empty())
+            continue;
+        float mesh_idx_float = (float)mesh_idx;
+        SetShaderValue(w.render.material.shader, GetShaderLocation(w.render.material.shader, "colorMode"), &mesh.color_mode, SHADER_UNIFORM_VEC4);
+        SetShaderValue(w.render.material.shader, GetShaderLocation(w.render.material.shader, "whichMesh"), &mesh_idx_float, SHADER_UNIFORM_FLOAT);
+        transforms.resize(mesh.instances.size());
+        for (size_t i = 0; i < mesh.instances.size(); ++i) {
+            const Instance &ins = mesh.instances[i];
+            transforms[i] = ins.transform;
+            transforms[i].m3 = (float)(ins.power.wire_texture_idx[0] + ins.power.wire_texture_idx[1] * 128);
+            transforms[i].m7 = ins.power.anim;
+            transforms[i].m11 = (float)ins.pre_rotation;
+            transforms[i].m15 = ins.tile_info;
+        }
+        DrawMeshInstanced(mesh.mesh, w.render.material, &transforms[0], (int)mesh.instances.size());
+    }
+
+    EndShaderMode();
+
+    for (MeshState &mesh: w.render.meshes) {
+        mesh.instances.clear();
+    }
+}
 
 void render_ui(World &w) {
     if (w.editor.on) {
-        /*
+        for (MeshState &mesh: w.render.meshes) {
+            mesh.instances.clear();
+        }
+
         DrawText(TextFormat("%d %d", w.prev_hover.x, w.prev_hover.y), 10, 50, 20, GREEN);
 
-        BeginMode2D(w.editor.palette_camera);
+        Camera3D camera3d = make_camera_3d(w.editor.palette_camera, w.editor.palette_camera.zoom / GetRenderHeight() * 2);
+        BeginMode3D(camera3d);
 
-        DrawRectangleV({-w.editor.palette_width, 0}, {w.editor.palette_width, (float)GetRenderHeight() / w.editor.palette_camera.zoom}, DARKBLUE);
-        std::vector<std::vector<Cell>> cells(3, std::vector<Cell>(3));
+        DrawPlane({-w.editor.palette_width/2, 10., 0}, {w.editor.palette_width, 1e5}, DARKBLUE);
+
         for (const EditorCell &cell : w.editor.palette) {
             if (cell.equivalent(w.editor.held)) {
                 const float s = 0.2;
-                DrawRectangleV({cell.rect.x - s/2, cell.rect.y - s/2}, {1.f + s, 1.f + s}, WHITE);
+                DrawPlane({cell.rect.x + .5f, 20., cell.rect.y + .5f}, {1.f + s, 1.f + s}, WHITE);
             }
+            Matrix transform = MatrixTranslate(cell.rect.x + .5f, 0, cell.rect.y + .5f);
+            IVec pos {-10, -10};
+            PowerAnim power {.wire_texture_idx = {0, 0}};
             if (cell.type == EDITOR_FLOOR) {
-                cells[1][1] = cell.floor;
-                draw_floor(cells, {1, 1}, {cell.rect.x, cell.rect.y});
+                if (cell.floor.floor == FLOOR_PASSABLE) {
+                    draw_under_floor(w, pos, cell.floor, transform, power, true);
+                } else {
+                    draw_floor(w, pos, cell.floor, transform, power, true);
+                }
             } else if (cell.type == EDITOR_TILE) {
-                draw_tile(cell.tile, 0, {cell.rect.x, cell.rect.y});
+                draw_tile(w, pos, cell.tile, transform, true);
             }
         }
 
-        EndMode2D();
-        */
+        render_instances(w, 30);
+
+        EndMode3D();
     }
 
     if (w.move.manual_advance != -1)
@@ -298,160 +511,96 @@ void render_ui(World &w) {
         DrawText(TextFormat("actions in queue: %lu", w.buffered_actions.size()), 10, 130, 20, GREEN);
 }
 
-Vector2 get_wire_texture_offset(const Power &power) {
-    //asdqwe
-    return {};
-}
-
 void render(World &w) {
     for (MeshState &mesh: w.render.meshes) {
         mesh.instances.clear();
     }
 
+    // Animate.
+    for (int y = 1; y + 1 < w.size.y; ++y) {
+        for (int x = 1; x + 1 < w.size.x; ++x) {
+            IVec pos {x, y};
+            Cell &cell = w.get_cell(pos);
+            if (cell.floor == FLOOR_VOID) {
+                // Hacks.
+                int void_mask = get_void_mask(w, pos, false);
+                Power fake_power = cell.floor_power;
+                fake_power.wires = (uint8_t)((cell.floor_power.wires & ~void_mask) | WIRE_CIRCLE);
+                update_power_anim(w, fake_power, true);
+                cell.floor_power.anim = fake_power.anim;
+            } else {
+                update_power_anim(w, cell.floor_power, false);
+            }
+            if (cell.tile != -1)
+                update_power_anim(w, w.tiles.at(cell.tile).power, false);
+        }
+    }
+
     Color clear_color;
-    if (w.editor.on)
+    if (w.editor.on) {
         clear_color = {100, 100, 200, 255};
-    else if (w.cells.at(1).at(1).floor_power.power & WIRE_RIGHT)
-        clear_color = WHITE;
-    else
-        clear_color = BLACK;
+    } else {
+        const PowerAnim &p = w.cells.at(1).at(1).floor_power.anim;
+        float powered = Lerp(p.wire_texture_idx[0] >= 32, p.wire_texture_idx[1] >= 32, p.anim);
+        clear_color = ColorLerp(BLACK, WHITE, powered);
+    }
     ClearBackground(clear_color);
 
-    Camera3D camera3d {.position = {w.camera.target.x, 100, w.camera.target.y}, .target = {w.camera.target.x, 90, w.camera.target.y}, .up = {0, 0, 1}, .fovy = 2.f / w.absolute_zoom, .projection = CAMERA_ORTHOGRAPHIC};
+    Camera3D camera3d = make_camera_3d(w.camera, w.absolute_zoom);
     BeginMode3D(camera3d);
 
-    for (int y = 1; y + 1 < w.size.y; ++y) {
-        for (int x = 1; x + 1 < w.size.x; ++x) {
+    for (int y = 0; y < w.size.y; ++y) {
+        for (int x = 0; x < w.size.x; ++x) {
+            bool is_edge = x == 0 || y == 0 || x + 1 == w.size.x || y + 1 == w.size.y;
+
             IVec pos {x, y};
-            const Cell &cell = w.get_cell(pos);
-            Vector2 wire_texture_offset = get_wire_texture_offset(cell.floor_power);
+            Cell &cell = w.get_cell(pos);
             Matrix transform = MatrixTranslate((float)pos.x + .5f, 0.f, (float)pos.y + .5f);
-            if (cell.floor == FLOOR_PASSABLE) {
-                w.render.meshes.at(MESH_FLOOR).instances.push_back({.transform = transform, .wire_texture_offset = wire_texture_offset});
-            }/*
-    } else if (cell.floor == FLOOR_WALL) {
-        const float margin = .04;
-        Vector2 p = pos;
-        Vector2 q = pos + Vector2{1.f, 1.f};
-        if (!(cell.weld & WALL_LEFT)) p.x += margin;
-        if (!(cell.weld & WALL_UP)) p.y += margin;
-        if (!(cells.at(idx.y).at(idx.x + 1).weld & WALL_LEFT)) q.x -= margin;
-        if (!(cells.at(idx.y + 1).at(idx.x).weld & WALL_UP)) q.y -= margin;
-        DrawRectangleV(p, q - p, {47, 47, 47, 255});
-    } else if (cell.floor == FLOOR_TRIGGER) {
-        DrawRectangleV(pos + Vector2{.1f, .1f}, {.8f, .8f}, {104, 104, 104, 255});
-        DrawRectangleV(pos + Vector2{.2f, .2f}, {.6f, .6f}, {72, 72, 72, 255});
-        DrawRectangleV(pos + Vector2{.3f, .3f}, {.4f, .4f}, {104, 104, 104, 255});
-        if ((cells.at(idx.y - 1).at(idx.x).barrier & WALL_LEFT) || (cells.at(idx.y).at(idx.x - 1).barrier & WALL_UP))
-            DrawRectangleV(pos, {.2f, .2f}, {190, 190, 190, 255});
-        if ((cells.at(idx.y - 1).at(idx.x + 1).barrier & WALL_LEFT) || (cells.at(idx.y).at(idx.x + 1).barrier & WALL_UP))
-            DrawRectangleV({pos.x + .8f, pos.y}, {.2f, .2f}, {190, 190, 190, 255});
-        if ((cells.at(idx.y + 1).at(idx.x).barrier & WALL_LEFT) || (cells.at(idx.y + 1).at(idx.x - 1).barrier & WALL_UP))
-            DrawRectangleV({pos.x, pos.y + .8f}, {.2f, .2f}, {190, 190, 190, 255});
-        if ((cells.at(idx.y + 1).at(idx.x + 1).barrier & WALL_LEFT) || (cells.at(idx.y + 1).at(idx.x + 1).barrier & WALL_UP))
-            DrawRectangleV({pos.x + .8f, pos.y + .8f}, {.2f, .2f}, {190, 190, 190, 255});
-    }
 
-    draw_power(cell.floor_power, pos);
-
-    if (cell.floor == FLOOR_VOID) {
-        const float margin = 10./70;
-        const Color outer = {172, 172, 172, 255};
-        const Color inner = {0, 0, 0, 0};
-        if (cells.at(idx.y).at(idx.x - 1).floor != FLOOR_VOID)
-            DrawRectangleGradientEx({pos.x, pos.y, margin, 1.f}, outer, outer, inner, inner);
-        if (cells.at(idx.y - 1).at(idx.x).floor != FLOOR_VOID)
-            DrawRectangleGradientEx({pos.x, pos.y, 1.f, margin}, outer, inner, inner, outer);
-        if (cells.at(idx.y).at(idx.x + 1).floor != FLOOR_VOID)
-            DrawRectangleGradientEx({pos.x + 1.f - margin, pos.y, margin, 1.f}, inner, inner, outer, outer);
-        if (cells.at(idx.y + 1).at(idx.x).floor != FLOOR_VOID)
-            DrawRectangleGradientEx({pos.x, pos.y + 1.f - margin, 1.f, margin}, inner, outer, outer, inner);
-
-        uint8_t wall_wires = cell.floor_power.wires & WIRE_ALL_DIRECTIONS;
-        if (wall_wires)
-            draw_power({.wires = wall_wires, .power = (uint8_t)(cell.floor_power.power & wall_wires)}, pos);
-    }
-
-    if (cell.barrier) {
-        const float thickness = 8./70;
-        const Color col {120, 80, 120, 255};
-        const int segments = 8;
-        if (cell.barrier & WALL_LEFT) {
-            if (cell.barrier_active & WALL_LEFT) {
-                DrawRectangleV({pos.x - thickness * .5f, pos.y}, {thickness, 1.f}, col);
-            } else {
-                for (int i = 0; i < segments; i += 2)
-                    DrawRectangleV({pos.x - thickness * .5f, pos.y + (float)i / (float)segments}, {thickness, 1.f / (float)segments}, col);
-            }
-        }
-        if (cell.barrier & WALL_UP) {
-            if (cell.barrier_active & WALL_UP) {
-                DrawRectangleV({pos.x, pos.y - thickness * .5f}, {1.f, thickness}, col);
-            } else {
-                for (int i = 0; i < segments; i += 2)
-                    DrawRectangleV({pos.x + (float)i / (float)segments, pos.y - thickness * .5f}, {1.f / (float)segments, thickness}, col);
-            }
-        }
-    }
-
-    asdqwe;*/
-            //draw_floor(w.cells, {x, y}, pos.to_float());
-        }
-    }
-    /*
-    for (int y = 1; y + 1 < w.size.y; ++y) {
-        for (int x = 1; x + 1 < w.size.x; ++x) {
-            IVec pos {x, y};
-            const Cell &cell = w.get_cell(pos);
-            if (cell.tile != -1) {
-                const Tile &tile = w.tiles.at(cell.tile);
-                int weld = tile.weld;
-                int t = w.cells.at(y).at(x + 1).tile;
-                if (t != -1 && (w.tiles.at(t).weld & WALL_LEFT)) weld |= WALL_RIGHT;
-                t = w.cells.at(y + 1).at(x).tile;
-                if (t != -1 && (w.tiles.at(t).weld & WALL_UP)) weld |= WALL_DOWN;
-
-                Vector2 fpos = pos.to_float();
-                if (tile.moving) {
-                    float t = w.move.elapsed;
-                    if (w.move.stage == STAGE_SECOND_HALF)
-                        t = 1 - t;
-                    fpos += dir_vec[w.move.dir] * t;
+            if (is_edge) {
+                MeshState &mesh = w.render.meshes.at(MESH_VOID_QUARTER_7);
+                IVec neighbor {std::max(1, std::min(w.size.x - 2, x)), std::max(1, std::min(w.size.y - 2, y))};
+                PowerAnim power = w.get_cell(neighbor).floor_power.anim;
+                for (int dir = 0; dir < 4; ++dir) {
+                    mesh.instances.push_back({.transform = transform, .power = power, .pre_rotation = (Direction)dir});
                 }
+                continue;
+            }
 
-                draw_tile(w.tiles.at(cell.tile), weld, fpos);
+            PowerAnim power = cell.floor_power.anim;
+
+            draw_under_floor(w, pos, cell, transform, power, false);
+            draw_floor(w, pos, cell, transform, power, false);
+
+            if (cell.tile != -1) {
+                Tile &tile = w.tiles.at(cell.tile);
+                draw_tile(w, pos, tile, transform, false);
+            }
+
+            if (cell.barrier) {
+                for (int dir: {DIR_LEFT, DIR_UP}) {
+                    if (cell.barrier & (1 << dir)) {
+                        float target = (cell.barrier_active & (1 << dir)) ? 0 : 1;
+                        float &anim = cell.barrier_anim[dir];
+                        if (anim < 0)
+                            anim = target;
+                        else if (target != anim)
+                            anim += (target > anim ? +1 : -1) * w.animation_delta * w.barrier_animation_rate;
+                        anim = Clamp(anim, 0, 1);
+                        float h = anim * .4;
+                        w.render.meshes.at(MESH_BARRIER).instances.push_back({.transform = MatrixMultiply(transform, MatrixTranslate(0, h, 0)), .pre_rotation = dir_opposite(dir)});
+                    }
+                }
             }
         }
-        }*/
-    //draw_selection_indicator(w);
-
-    BeginShaderMode(w.render.material.shader);
-
-    //Ray ray = GetScreenToWorldRay({(float)GetScreenWidth()/2, (float)GetScreenHeight()/2}, camera3d);
-    //DrawSphere({50,0,50}, 10, WHITE);
-    //DrawMesh(w.render.meshes[MESH_FLOOR].mesh, w.render.material, MatrixTranslate(50,0,50));
-    //Matrix m[2] = {MatrixTranslate(50,0,50), MatrixIdentity()};
-    //DrawMeshInstanced(w.render.meshes[MESH_FLOOR].mesh, w.render.material, m, 2);
-
-    //*
-    std::vector<Matrix> transforms;
-    size_t wire_state_idx = 0;
-    for (MeshState &mesh: w.render.meshes) {
-        mesh.wire_state_start_idx = wire_state_idx;
-        wire_state_idx += mesh.instances.size();
     }
-    for (MeshState &mesh: w.render.meshes) {
-        if (mesh.instances.empty())
-            continue;
-        transforms.resize(mesh.instances.size());
-        for (size_t i = 0; i < mesh.instances.size(); ++i) {
-            transforms[i] = mesh.instances[i].transform;
-        }
-        DrawMeshInstanced(mesh.mesh, w.render.material, &transforms[0], (int)mesh.instances.size());
-        }//*/
+    draw_selection_indicator(w);
 
-    EndShaderMode();
+    render_instances(w);
+
     EndMode3D();
 
     render_ui(w);
 }
+
+// todo but realistically not: optimize graph traversal more, wire antialiasing of some kind, deal with srgb correctly, higher-poly rounded corners on tiles, sounds, better editor controls, show controls, menus and options

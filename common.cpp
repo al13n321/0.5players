@@ -91,6 +91,11 @@ struct IVec {
 
 const IVec dir_vec[4] = {{-1, 0}, {0, -1}, {1, 0}, {0, 1}};
 
+struct PowerAnim {
+    std::array<int, 2> wire_texture_idx {-1, -1};
+    float anim = 0;
+};
+
 struct Power {
     uint8_t wires = WIRE_NONE;
     uint8_t power = WIRE_NONE;
@@ -99,6 +104,10 @@ struct Power {
     std::array<int, 5> vertex {-1, -1, -1, -1, -1}; // Direction -> vertex idx in Graph; last element is for cell center
     int edge_middle_exposed = WALL_NONE; // which sides of the square have their midpoints conductive and not covered by tiles
     int edge_rear_end_exposed = WALL_NONE; // same but instead of midpoint it's the corner in direction opposite of move.dir
+    int static_vertex = -1;
+
+    // Animations.
+    PowerAnim anim;
 
     bool operator==(const Power &r) const { return wires == r.wires && power == r.power; }
 
@@ -133,6 +142,9 @@ struct Cell {
 
     // Tile that occupies at least half of this cell. If Tile.moving is true, World.move.{dist,dir} tells how this tile is offset from the center of this cell.
     int tile = -1;
+
+    // Animations.
+    std::array<float, 2> barrier_anim {-1, -1};
 
     bool operator==(const Cell &) const = default;
 };
@@ -178,6 +190,7 @@ struct EditorCell {
         if (type == EDITOR_FLOOR) return floor == r.floor;
         if (type == EDITOR_TILE) return tile == r.tile;
         assert(false);
+        return false;
     }
 };
 
@@ -299,46 +312,52 @@ struct Action {
 enum WhichMesh {
     MESH_TILE_QUARTER_0 = 0,
     MESH_TILE_QUARTER_7 = 7,
-    MESH_BLACK_TILE_QUARTER_0 = 8,
-    MESH_BLACK_TILE_QUARTER_7 = 15,
-    MESH_VOID_QUARTER_0 = 16,
-    MESH_VOID_QUARTER_7 = 23,
+    MESH_VOID_QUARTER_0 = 8,
+    MESH_VOID_QUARTER_7 = 15,
+    MESH_BLACK_TILE_QUARTER_0 = 16,
+    MESH_BLACK_TILE_QUARTER_7 = 23,
 
     MESH_TRIGGER = 24,
-    MESH_TRIGGER_CORNER,
-    MESH_BARRIER,
-    MESH_FLOOR,
+    MESH_TRIGGER_CORNER = 25,
+    MESH_BARRIER = 26,
+    MESH_FLOOR = 27,
 
     MESH_COUNT,
 };
 
 struct Instance {
     Matrix transform {};
-    Vector2 wire_texture_offset {};
-    Direction wire_texture_rotation = DIR_LEFT;
+    PowerAnim power;
+    Direction pre_rotation = DIR_LEFT;
+    float tile_info = 0;
 };
 
 struct MeshState {
     Mesh mesh {};
+    Vector4 color_mode {-1, -1, -1, -1};
     std::vector<Instance> instances;
-    size_t wire_state_start_idx = 0;
 };
+
+const Vector2 default_skew {-.35, -.35};
 
 struct Render {
     std::array<MeshState, MESH_COUNT> meshes {};
     Material material {};
-    Texture wire_state_texture {};
-    Image wire_state_image {};
+
+    Vector2 skew = default_skew;
 };
 
 struct World {
     IVec size; // first and last cell of each row and column are sentinel cells that are not rendered and not updated
     std::vector<std::vector<Cell>> cells;
     std::vector<Tile> tiles;
+    int num_static_vertices = -1; // if -1, recalc_static_connectivity() needs to be called; must be cleared when any FLOOR_VOID tiles are added or removed
 
     std::string save_file_path = "save.bin";
     std::string replays_file_path = "replays.bin";
     std::array<float, 6> animation_rates = {5., 10., 20., 40., 80., 10000.}; // moves per second, depending on how many buffered inputs there are
+    float barrier_animation_rate = 2.;
+    float power_animation_rate = 2.;
 
     std::vector<std::vector<char>> undo;
     size_t undo_idx = 0; // undo[undo_idx - 1] is the current state
@@ -355,16 +374,25 @@ struct World {
 
     MoveState move;
     float animation_rate = 0;
+    float animation_delta = 0;
     std::deque<Action> buffered_actions;
     int dragging_tile = -1; // as of the time of input execution, not at the time of input buffering
 
     std::array<std::vector<Action>, 10> recordings;
     int recording_active = -1;
 
-    void init_start(IVec s) {
+    int debug_fudge_parameter = 0;
+
+    void clear_grid(IVec s) {
         size = s;
-        //cells.assign(size.y, std::vector<Cell>(size.x));
-        cells.assign(size.y, std::vector<Cell>(size.x, {.floor = FLOOR_PASSABLE}));
+        tiles.clear();
+        cells.clear();
+        cells.assign(size.y, std::vector<Cell>(size.x));
+        for (int y = 1; y + 1 < size.y; ++y) {
+            for (int x = 1; x + 1 < size.x; ++x) {
+                cells.at(y).at(x).floor = FLOOR_PASSABLE;
+            }
+        }
     }
 
     // To init, call either init_start() or load(), then call init_finish().
@@ -382,7 +410,7 @@ struct World {
     }
 
     void save(std::vector<char> &out) const;
-    void load(const std::vector<char> &in_vec);
+    void load(const std::vector<char> &in_vec, bool ignore_camera);
     void save_to_file();
     bool load_from_file();
     void save_replays(std::vector<char> &out) const;
@@ -409,7 +437,7 @@ struct World {
             return {-1, -1};
         p = GetScreenToWorld2D(p, camera);
         IVec r {(int)p.x, (int)p.y};
-        if (r.x <= 0 || r.x + 1 >= size.x || r.y <= 0 || r.y >= size.y)
+        if (r.x <= 0 || r.x + 1 >= size.x || r.y <= 0 || r.y + 1 >= size.y)
             return {-1, -1};
         return r;
     }
@@ -424,8 +452,20 @@ struct World {
         tiles.pop_back();
     }
 
-    Cell & get_cell(IVec p) { return cells.at(p.y).at(p.x); }
-    const Cell & get_cell(IVec p) const { return cells.at(p.y).at(p.x); }
+    Cell & get_cell(IVec p) {
+#ifdef NDEBUG
+        return cells[p.y][p.x];
+#else
+        return cells.at(p.y).at(p.x);
+#endif
+    }
+    const Cell & get_cell(IVec p) const {
+#ifdef NDEBUG
+        return cells[p.y][p.x];
+#else
+        return cells.at(p.y).at(p.x);
+#endif
+    }
 };
 
 bool has_active_barrier(const World &w, IVec pos, int dir) {
@@ -434,4 +474,16 @@ bool has_active_barrier(const World &w, IVec pos, int dir) {
         dir = dir_opposite(dir);
     }
     return w.get_cell(pos).barrier_active & (1 << dir);
+}
+
+bool has_weld(const World &w, IVec pos, int dir, bool is_tile) {
+    if (dir >= 2) {
+        pos += dir_vec[dir];
+        dir = dir_opposite(dir);
+    }
+    const Cell &cell = w.get_cell(pos);
+    if (is_tile)
+        return cell.tile != -1 && (w.tiles.at(cell.tile).weld & (1 << dir));
+    else
+        return cell.weld & (1 << dir);    
 }

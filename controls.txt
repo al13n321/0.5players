@@ -1,0 +1,32 @@
+Game controls:
+ * middle-mouse-button + drag to pan
+ * mouse wheel to zoom
+ * mouse click
+ * wasd or arrows
+ * can also drag tiles with the mouse
+ * z to undo, z to redo
+
+Janky terrible record/replay controls:
+ * ctrl+digit (ctrl+0 .. ctrl+9) to start recording a macro (while recording, redo is not allowed; also, I wouldn't be surprised if undo during animation breaks recording, I haven't checked)
+ * ctrl+digit again to stop recording
+ * digit to replay a previous recording; it just repeats the inputs, so if you start from a different state, it'll probably do nonsense moves and give up early
+ * if there's already a macro on that digit, ctrl+digits clears it; ctrl+shift+digit to append to it instead
+ * weird tech: you can replay a macro while recording another macro; this way you can concatenate multiple macros together, e.g. record a playthrough in a few segments, then merge them into one macro later
+ * F4 to save all 10 macros to file "replays.bin"; it's loaded on startup automatically
+
+Level editor with questionable controls:
+ * F10 to toggle level editor on/off
+ * click a tile in palette on the right to select it (left column is movable tiles, right column is floor/walls/triggers)
+ * or press 'q' while hovering over a tile in the world to copy it
+ * click or drag in the world to place selected/copied tile
+ * hold right mouse button and drag to weld tiles together
+ * wasd to toggle wires on the cell under the cursor
+ * j for bridge wires, k for conductive surface, o for circle, p to toggle power on the circle
+ * ctrl + hold right mouse button and drag to place doors
+ * F5 to save the map to file "save.bin" (it'll overwrite the original file!); it's loaded on startup automatically
+ * F9 to load from the same file
+ * alt+r to reset everything to a small empty map
+ * alt+arrow keys to resize the map
+
+Misc:
+ * '[' for animation debug mode, where tile movement animation is stalled, and you can advance it step by step by pressing ']'

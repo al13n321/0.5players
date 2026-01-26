@@ -16,19 +16,13 @@ struct Edge {
     }
     bool operator==(const Edge &e) const = default;
 };
-enum VertexType {
-    VERTEX_FLOOR,
-    VERTEX_TILE,
-};
 struct Vertex {
-    VertexType type = VERTEX_FLOOR;
-    IVec pos;
-    int ti = -1;
     IVec virtual_pos; // for edge directions
     bool vertical = false; // if WIRE_BRIDGE, this tells whether this is the horizontal or the vertical wire
     bool whole = false; // WIRE_WHOLE
     bool lit = false;
     bool lit_circle = false;
+    bool final_lit = false;
 
     bool donut = false; // found a hole in the (connected component of) planar graph of `whole` vertices
 
@@ -51,9 +45,45 @@ struct Graph {
     }
 };
 
+void recalc_static_connectivity(World &w) {
+    w.num_static_vertices = 0;
+    for (int y = 1; y + 1 < w.size.y; ++y)
+        for (int x = 1; x + 1 < w.size.x; ++x)
+            w.cells.at(y).at(x).floor_power.static_vertex = -1;
+    for (int y = 1; y + 1 < w.size.y; ++y) {
+        for (int x = 1; x + 1 < w.size.x; ++x) {
+            IVec pos0 {x, y};
+            Cell &cell0 = w.get_cell(pos0);
+            if (cell0.floor_power.static_vertex != -1 || cell0.floor != FLOOR_VOID)
+                continue;
+
+            std::vector<IVec> stack {pos0};
+            cell0.floor_power.static_vertex = w.num_static_vertices;
+            while (!stack.empty()) {
+                IVec pos = stack.back();
+                stack.pop_back();
+                for (int d = 0; d < 4; ++d) {
+                    IVec pp = pos + dir_vec[d];
+                    if (pp.x <= 0 || pp.y <= 0 || pp.x >= w.size.x || pp.y >= w.size.y)
+                        continue;
+                    Cell &cell2 = w.get_cell(pp);
+                    if (cell2.floor_power.static_vertex != -1 || cell2.floor != FLOOR_VOID)
+                        continue;
+                    cell2.floor_power.static_vertex = cell0.floor_power.static_vertex;
+                    stack.push_back(pp);
+                }
+            }
+            w.num_static_vertices += 1;
+        }
+    }
+}
+
 void update_power(World &w) {
     double start_time = GetTime();
-    
+
+    if (w.num_static_vertices == -1)
+        recalc_static_connectivity(w);
+
     for (int y = 1; y + 1 < w.size.y; ++y) {
         for (int x = 1; x + 1 < w.size.x; ++x) {
             w.cells.at(y).at(x).floor_power.clear_graph_state();
@@ -66,8 +96,12 @@ void update_power(World &w) {
     Graph g;
     MoveDist dist = w.move.dist;
 
+    for (int i = 0; i < w.num_static_vertices; ++i) {
+        g.v.push_back({.virtual_pos = {}, .whole = false, .lit = false, .lit_circle = false});
+    }
+    
     // Create all vertices.
-    auto add_vertices = [&](Power &power, VertexType type, IVec pos, int ti, bool moving) {
+    auto add_vertices = [&](Power &power, IVec pos, bool moving) {
         if (power.wires == WIRE_NONE)
             return;
 
@@ -77,13 +111,19 @@ void update_power(World &w) {
 
         if (power.wires & WIRE_BRIDGE) {
             int horizontal = g.v.size();
-            g.v.push_back({.type = type, .pos = pos, .ti = ti, .virtual_pos = virtual_pos, .lit = !!(power.power & (WIRE_LEFT | WIRE_RIGHT))});
+            g.v.push_back({.virtual_pos = virtual_pos, .lit = !!(power.power & (WIRE_LEFT | WIRE_RIGHT))});
             int vertical = g.v.size();
-            g.v.push_back({.type = type, .pos = pos, .ti = ti, .virtual_pos = virtual_pos, .vertical = true, .lit = !!(power.power & (WIRE_UP | WIRE_DOWN))});
+            g.v.push_back({.virtual_pos = virtual_pos, .vertical = true, .lit = !!(power.power & (WIRE_UP | WIRE_DOWN))});
             power.vertex = {horizontal, vertical, horizontal, vertical, -1};
         } else {
-            int v = g.v.size();
-            g.v.push_back({.type = type, .pos = pos, .ti = ti, .virtual_pos = virtual_pos, .whole = !!(power.wires & WIRE_WHOLE), .lit = !!power.power, .lit_circle = !!(power.power & WIRE_CIRCLE)});
+            int v;
+            if (power.static_vertex == -1) {
+                v = g.v.size();
+                g.v.push_back({.virtual_pos = virtual_pos, .whole = !!(power.wires & WIRE_WHOLE), .lit = !!power.power, .lit_circle = !!(power.power & WIRE_CIRCLE)});
+            } else {
+                v = power.static_vertex;
+                g.v[v].lit |= !!power.power;
+            }
             power.vertex[4] = v;
             for (int dir = 0; dir < 4; ++dir)
                 if (power.wires & (1 << dir))
@@ -102,7 +142,7 @@ void update_power(World &w) {
                 cell.floor_power.power &= ~WIRE_CIRCLE;
 
                 Tile &tile = w.tiles.at(cell.tile);
-                add_vertices(tile.power, VERTEX_TILE, pos, cell.tile, tile.moving);
+                add_vertices(tile.power, pos, tile.moving);
 
                 tile.power.edge_middle_exposed = tile.power.wires & WIRE_ALL_DIRECTIONS;
                 if (tile.power.wires & WIRE_WHOLE)
@@ -110,7 +150,7 @@ void update_power(World &w) {
             }
 
             // (This must be after extinguishing floor circle above.)
-            add_vertices(cell.floor_power, VERTEX_FLOOR, pos, -1, false);
+            add_vertices(cell.floor_power, pos, false);
 
             // Check which floor edges are covered by tiles.
             for (int dir = 0; dir < 4; ++dir) {
@@ -180,6 +220,8 @@ void update_power(World &w) {
                 }
                 for (int dir = 0; dir < 2; ++dir) { // only look left/up, since this is symmetric and we're adding bidirectional edge
                     Cell &cell2 = w.get_cell(pos + dir_vec[dir]);
+                    if (cell.floor == FLOOR_VOID && cell2.floor == FLOOR_VOID)
+                        continue;
                     Power *power2 = &cell2.floor_power;
                     Power *moving_power2 = NULL;
                     if (cell2.tile != -1) {
@@ -235,7 +277,7 @@ void update_power(World &w) {
                         if ((power2->edge_middle_exposed & (1 << undir)) && ((power.wires & WIRE_WHOLE) || (power2->wires & WIRE_WHOLE) || w.move.dist < DIST_OVER_WIRE_WIDTH) && !has_active_barrier(w, pos, dir))
                             g.add_edge(power.vertex[dir], power2->vertex[undir]);
 
-                        if (power.wires & WIRE_WHOLE) {
+                        if (!has_active_barrier(w, pos + dir_vec[forward], dir)) {
                             const Cell &cell3 = w.get_cell(pos + dir_vec[dir] + dir_vec[forward]);
                             const Power *power3 = &cell3.floor_power;
                             if (cell3.tile != -1) {
@@ -243,7 +285,12 @@ void update_power(World &w) {
                                 if (!tile3.moving)
                                     power3 = &tile3.power;
                             }
-                            if ((power3->edge_rear_end_exposed & (1 << undir)) && !has_active_barrier(w, pos + dir_vec[forward], dir))
+                            bool touching = (power.wires & WIRE_WHOLE) && (power3->edge_rear_end_exposed & (1 << undir));
+                            if (w.move.dist >= DIST_HALF_MINUS_EPSILON) {
+                                touching |= (power.wires & WIRE_WHOLE) && (power3->edge_middle_exposed & (1 << undir));
+                                touching |= (power3->wires & WIRE_WHOLE) && (power3->edge_rear_end_exposed & (1 << undir));
+                            }
+                            if (touching)
                                 g.add_edge(power.vertex[dir], power3->vertex[undir]);
                         }
                     }
@@ -252,20 +299,34 @@ void update_power(World &w) {
         }
     }
 
-    for (Edge &e: g.e)
+    // Make adjacency lists.
+    for (Edge &e: g.e) {
         e.dir = g.v.at(e.to).virtual_pos - g.v.at(e.from).virtual_pos;
-    std::sort(g.e.begin(), g.e.end());
-    for (int start = 0; start < g.e.size(); ) {
-        int from = g.e[start].from;
-        int end = start + 1;
-        while (end < g.e.size() && g.e[end].from == from) {
-            assert(g.e[end].to != g.e[end - 1].to); // we avoid duplicated edges by construction; donut search may be sensitive to duplicates
-            assert(g.e[end].dir != g.e[end - 1].dir); // we avoid duplicated edges by construction; donut search may be sensitive to duplicates
-            ++end;
+        g.v.at(e.from).e_end += 1;
+    }
+    {
+        int cnt = 0;
+        for (Vertex &v: g.v) {
+            v.e_start = cnt;
+            cnt += v.e_end;
+            v.e_end = v.e_start;
         }
-        g.v.at(from).e_start = start;
-        g.v.at(from).e_end = end;
-        start = end;
+        auto edges = g.e;
+        for (const Edge &e: edges) {
+            Vertex &v = g.v[e.from];
+            g.e[v.e_end] = e;
+            v.e_end += 1;
+        }
+        for (Vertex &v: g.v) {
+            if (v.whole) {
+                std::sort(g.e.begin() + v.e_start, g.e.begin() + v.e_end);
+                for (int i = v.e_start; i + 1 < v.e_end; ++i) {
+                    // We avoid duplicated edges by construction; donut search may be sensitive to duplicates.
+                    assert(g.e[i].to != g.e[i + 1].to);
+                    assert(g.e[i].dir != g.e[i + 1].dir);
+                }
+            }
+        }
     }
 
     // Detect donuts, i.e. connected components consisting of only solid black/white cells/tiles (`whole` = true) that have a hole.
@@ -323,20 +384,22 @@ void update_power(World &w) {
 
     for (Vertex &v: g.v)
         v.visited = false;
+    struct StackEntry {
+        int v;
+        int parent;
+        int wires_above;
+    };
+    std::vector<int> verts;
+    std::vector<StackEntry> stack;
     for (int v0 = 0; v0 < g.v.size(); ++v0) {
         if (g.v[v0].visited)
             continue;
         bool any_lit = false;
         bool has_cycle = false;
-        std::vector<int> verts;
 
-        struct StackEntry {
-            int v;
-            int parent;
-            int wires_above;
-        };
-
-        std::vector<StackEntry> stack {{v0, -1, 0}};
+        verts.clear();
+        stack.clear();
+        stack.push_back({v0, -1, 0});
         while (!stack.empty()) {
             StackEntry en = stack.back();
             stack.pop_back();
@@ -365,16 +428,27 @@ void update_power(World &w) {
         }
 
         if (has_cycle && any_lit) {
-            for (int v: verts) {
-                Vertex &vert = g.v[v];
-                Power &power = vert.type == VERTEX_FLOOR ? w.get_cell(vert.pos).floor_power : w.tiles.at(vert.ti).power;
-                if (power.wires & WIRE_BRIDGE)
-                    power.power |= vert.vertical ? (WIRE_UP | WIRE_DOWN) : (WIRE_LEFT | WIRE_RIGHT);
-                else
-                    power.power = power.wires;
-            }
+            for (int v: verts)
+                g.v[v].final_lit = true;
         }
     }
 
-    //if (GetRandomValue(0, 200) == 0) std::cout << "update_power took " << GetTime() - start_time << " seconds" << std::endl;
+    auto apply_result = [&](Power &power) {
+        if (power.wires & WIRE_BRIDGE) {
+            if (g.v.at(std::max(power.vertex[DIR_LEFT], power.vertex[DIR_RIGHT])).final_lit)
+                power.power |= WIRE_LEFT | WIRE_RIGHT;
+            if (g.v.at(std::max(power.vertex[DIR_UP], power.vertex[DIR_DOWN])).final_lit)
+                power.power |= WIRE_UP | WIRE_DOWN;
+        } else if (power.wires) {
+            if (g.v.at(power.vertex[4]).final_lit)
+                power.power = power.wires;
+        }
+    };
+    for (int y = 1; y + 1 < w.size.y; ++y)
+        for (int x = 1; x + 1 < w.size.x; ++x)
+            apply_result(w.cells.at(y).at(x).floor_power);
+    for (Tile &tile: w.tiles)
+        apply_result(tile.power);
+
+    if (GetRandomValue(0, 200) == 0) std::cout << "update_power took " << (GetTime() - start_time) * 1e3 << " ms" << std::endl;
 }

@@ -15,11 +15,11 @@ void load_pod(T *x, const char **in, const char *end) {
 void World::save(std::vector<char> &out) const {
     //double start_time = GetTime();
 
-    // todo: save camera.target and absolute_zoom
-    
-    size_t version = 4;
+    size_t version = 5;
     save_pod(&version, out);
     save_pod(&size, out);
+    save_pod(&camera.target, out);
+    save_pod(&absolute_zoom, out);
     size_t t = tiles.size();
     save_pod(&t, out);
 
@@ -50,7 +50,7 @@ void World::save(std::vector<char> &out) const {
     // loop memcpy save v2 takes 0.08ms
     //std::cout << "save took " << (GetTime() - start_time) << " seconds" << std::endl;
 }
-void World::load(const std::vector<char> &in_vec) {
+void World::load(const std::vector<char> &in_vec, bool ignore_camera) {
     //double start_time = GetTime();
 
     const char *in = &in_vec[0];
@@ -58,12 +58,22 @@ void World::load(const std::vector<char> &in_vec) {
     size_t version = 0;
     load_pod(&version, &in, end);
 
-    if (version != 3 && version != 4)
+    if (version < 3 || version > 5)
         std::abort();
 
     load_pod(&size, &in, end);
     if (size.x < 2 || size.y < 2 || 1000000 / size.x / size.y == 0)
         std::abort();
+    if (version >= 5) {
+        Vector2 t;
+        float z;
+        load_pod(&t, &in, end);
+        load_pod(&z, &in, end);
+        if (!ignore_camera) {
+            camera.target = t;
+            absolute_zoom = z;
+        }
+    }
     cells.resize(size.y);
     for (int y = 0; y < size.y; ++y) {
         cells[y].assign(size.x, {});
@@ -89,7 +99,7 @@ void World::load(const std::vector<char> &in_vec) {
             memcpy(&cells[y][x].floor_power, in, power_bytes);
             in += power_bytes;
 
-            if (version == 4) {
+            if (version >= 4) {
                 if (end - in < 1)
                     std::abort();
                 memcpy(&cells[y][x].barrier_active, in, 1);
@@ -146,7 +156,7 @@ bool World::load_from_file() {
     std::vector<char> data;
     if (!read_whole_file(save_file_path, data))
         return false;
-    load(data);
+    load(data, false);
     return true;
 }
 

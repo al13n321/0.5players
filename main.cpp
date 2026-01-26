@@ -18,13 +18,14 @@
 #include "render.cpp"
 
 int main() {
-    InitWindow(2000, 2000, "hello world");
+    SetConfigFlags(FLAG_WINDOW_RESIZABLE | FLAG_MSAA_4X_HINT | FLAG_WINDOW_MAXIMIZED);
+    InitWindow(1500, 1000, "hello world");
     SetTargetFPS(144);
 
     World w;
     if (!w.load_from_file())
     {
-        w.init_start({10, 10});
+        w.clear_grid({10, 10});
         w.editor.on = true;
     }
     w.load_replays_from_file();
