@@ -14,7 +14,7 @@ fi
 mkdir "$name"
 mv a.exe "$name/0.5players.exe"
 mkdir "$name/assets"
-cp controls.txt assets/replays.bin "$name/"
+cp README.md assets/replays.bin "$name/"
 cp assets/{tiles.glb,walls.png,wires.png,level.bin} "$name/assets/"
 zip -r "${name}.zip" "$name"
 

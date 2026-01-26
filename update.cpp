@@ -216,10 +216,11 @@ void handle_misc_input(World &w, IVec hover) {
             undoable = true;
         }
     } else {
+        /*
         if (IsMouseButtonDown(MOUSE_BUTTON_RIGHT))
             w.render.skew += GetMouseDelta() * 1e-3;
         else
-            w.render.skew = default_skew;
+            w.render.skew = default_skew;*/
     }
 
     if (w.undo_repeat.check({KEY_Z}) && w.undo_idx > 1) {
