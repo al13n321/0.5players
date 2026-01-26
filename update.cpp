@@ -209,9 +209,10 @@ void handle_misc_input(World &w, IVec hover) {
             w.num_static_vertices = -1;
 
         if (IsKeyPressed(KEY_F5))
-            w.save_to_file();
+            w.save_to_file("save.bin");
         if (IsKeyPressed(KEY_F9)) {
-            w.load_from_file();
+            if (!w.load_from_file("save.bin"))
+                w.load_from_file("assets/level.bin");
             undoable = true;
         }
     } else {
@@ -233,24 +234,6 @@ void handle_misc_input(World &w, IVec hover) {
         w.undo_idx += 1;
         w.load(w.undo.at(w.undo_idx - 1), true);
     }
-
-    for (int i = 0; i < 10; ++i) {
-        if (IsKeyPressed(KEY_ZERO + i)) {
-            if (IsKeyDown(KEY_LEFT_CONTROL)) {
-                if (w.recording_active == i)
-                    w.recording_active = -1;
-                else {
-                    w.recording_active = i;
-                    if (!IsKeyDown(KEY_LEFT_SHIFT))
-                        w.recordings.at(i).clear();
-                }
-            } else {
-                w.buffered_actions.insert(w.buffered_actions.end(), w.recordings.at(i).begin(), w.recordings.at(i).end());
-            }
-        }
-    }
-    if (IsKeyPressed(KEY_F4))
-        w.save_replays_to_file();
 
     for (int y = 1; y + 1 < w.size.y; ++y) {
         for (int x = 1; x + 1 < w.size.x; ++x) {
@@ -577,6 +560,23 @@ void update(World &w) {
         w.editor.layout();
     if (w.move.stage == STAGE_NONE)
         handle_misc_input(w, hover);
+
+    for (int i = 0; i < 10; ++i) {
+        if (IsKeyPressed(KEY_ZERO + i)) {
+            if (IsKeyDown(KEY_LEFT_CONTROL)) {
+                if (w.recording_active == i) {
+                    w.recording_active = -1;
+                    w.save_replays_to_file();
+                } else {
+                    w.recording_active = i;
+                    if (!IsKeyDown(KEY_LEFT_SHIFT))
+                        w.recordings.at(i).clear();
+                }
+            } else {
+                w.buffered_actions.insert(w.buffered_actions.end(), w.recordings.at(i).begin(), w.recordings.at(i).end());
+            }
+        }
+    }
 
     if (IsKeyDown(KEY_LEFT_ALT)) {
         if (IsKeyPressed(KEY_LEFT_BRACKET))

@@ -79,7 +79,14 @@ void recalc_static_connectivity(World &w) {
 }
 
 void update_power(World &w) {
+    std::vector<std::pair<const char *, double>> profiling;
     double start_time = GetTime();
+    double prev_time = start_time;
+    auto end_profiling_zone = [&](const char *name) {
+        double t = GetTime();
+        profiling.emplace_back(name, t - prev_time);
+        prev_time = t;
+    };
 
     if (w.num_static_vertices == -1)
         recalc_static_connectivity(w);
@@ -94,12 +101,16 @@ void update_power(World &w) {
     }
 
     Graph g;
+    g.v.reserve(10000);
+    g.e.reserve(20000);
     MoveDist dist = w.move.dist;
 
     for (int i = 0; i < w.num_static_vertices; ++i) {
         g.v.push_back({.virtual_pos = {}, .whole = false, .lit = false, .lit_circle = false});
     }
-    
+
+    end_profiling_zone("prep");
+
     // Create all vertices.
     auto add_vertices = [&](Power &power, IVec pos, bool moving) {
         if (power.wires == WIRE_NONE)
@@ -184,6 +195,7 @@ void update_power(World &w) {
                 cell.floor_power.edge_rear_end_exposed = WALL_NONE;
         }
     }
+    end_profiling_zone("verts");
 
     // Create edges.
     for (int y = 1; y + 1 < w.size.y; ++y) {
@@ -298,6 +310,7 @@ void update_power(World &w) {
             }
         }
     }
+    end_profiling_zone("edges");
 
     // Make adjacency lists.
     for (Edge &e: g.e) {
@@ -328,6 +341,7 @@ void update_power(World &w) {
             }
         }
     }
+    end_profiling_zone("adj");
 
     // Detect donuts, i.e. connected components consisting of only solid black/white cells/tiles (`whole` = true) that have a hole.
     // Walk the perimeter of each face of the planar graph.
@@ -381,6 +395,7 @@ void update_power(World &w) {
         if (area < 0 && count > 4)
             g.v[g.e[e].from].donut = true;
     }
+    end_profiling_zone("donu");
 
     for (Vertex &v: g.v)
         v.visited = false;
@@ -419,10 +434,13 @@ void update_power(World &w) {
             has_cycle |= vert.donut;
             int next_wires_above = vert.wires_above + !vert.whole;
 
+            bool saw_parent = false;
             for (int ei = vert.e_start; ei < vert.e_end; ++ei) {
                 int v2 = g.e[ei].to;
-                if (v2 == en.parent)
+                if (v2 == en.parent && !saw_parent) {
+                    saw_parent = true;
                     continue;
+                }
                 stack.push_back({v2, en.v, next_wires_above});
             }
         }
@@ -432,6 +450,7 @@ void update_power(World &w) {
                 g.v[v].final_lit = true;
         }
     }
+    end_profiling_zone("comp");
 
     auto apply_result = [&](Power &power) {
         if (power.wires & WIRE_BRIDGE) {
@@ -449,6 +468,18 @@ void update_power(World &w) {
             apply_result(w.cells.at(y).at(x).floor_power);
     for (Tile &tile: w.tiles)
         apply_result(tile.power);
+    end_profiling_zone("apply");
 
-    if (GetRandomValue(0, 200) == 0) std::cout << "update_power took " << (GetTime() - start_time) * 1e3 << " ms" << std::endl;
+    /*
+    // Print how long different parts of this function took.
+    if (GetRandomValue(0, 200) == 0) {
+        std::stringstream ss;
+        ss << "update_power took " << (int)((GetTime() - start_time) * 1e6) << " us: ";
+        for (int i = 0; i < profiling.size(); ++i) {
+            if (i > 0)
+                ss << ", ";
+            ss << profiling[i].first << " " << (int)(profiling[i].second * 1e6);
+        }
+        std::cout << ss.str() << std::endl;
+    }*/
 }

@@ -353,7 +353,6 @@ struct World {
     std::vector<Tile> tiles;
     int num_static_vertices = -1; // if -1, recalc_static_connectivity() needs to be called; must be cleared when any FLOOR_VOID tiles are added or removed
 
-    std::string save_file_path = "save.bin";
     std::string replays_file_path = "replays.bin";
     std::array<float, 6> animation_rates = {5., 10., 20., 40., 80., 10000.}; // moves per second, depending on how many buffered inputs there are
     float barrier_animation_rate = 2.;
@@ -411,8 +410,8 @@ struct World {
 
     void save(std::vector<char> &out) const;
     void load(const std::vector<char> &in_vec, bool ignore_camera);
-    void save_to_file();
-    bool load_from_file();
+    void save_to_file(const char *path);
+    bool load_from_file(const char *path);
     void save_replays(std::vector<char> &out) const;
     void load_replays(const std::vector<char> &in_vec);
     void save_replays_to_file();

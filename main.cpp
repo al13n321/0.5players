@@ -5,6 +5,7 @@
 #include <cassert>
 #include <cstring>
 #include <fstream>
+#include <sstream>
 #include <cstdint>
 #include <unordered_set>
 #include <array>
@@ -23,7 +24,7 @@ int main() {
     SetTargetFPS(144);
 
     World w;
-    if (!w.load_from_file())
+    if (!w.load_from_file("assets/level.bin"))
     {
         w.clear_grid({10, 10});
         w.editor.on = true;

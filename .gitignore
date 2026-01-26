@@ -2,7 +2,9 @@ a.out
 a.exe
 archive/replays*.bin
 archive/save*.bin
-replays.bin
+/replays.bin
 save.bin
 assets/*.blend1
 assets/*~
+0.5players/*
+0.5players.zip

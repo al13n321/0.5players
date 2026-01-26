@@ -8,11 +8,11 @@ Game controls:
 
 Janky terrible record/replay controls:
  * ctrl+digit (ctrl+0 .. ctrl+9) to start recording a macro (while recording, redo is not allowed; also, I wouldn't be surprised if undo during animation breaks recording, I haven't checked)
- * ctrl+digit again to stop recording
+ * ctrl+digit again to stop recording and save all 10 macros to file "replays.bin"; it's loaded on startup automatically
  * digit to replay a previous recording; it just repeats the inputs, so if you start from a different state, it'll probably do nonsense moves and give up early
  * if there's already a macro on that digit, ctrl+digits clears it; ctrl+shift+digit to append to it instead
  * weird tech: you can replay a macro while recording another macro; this way you can concatenate multiple macros together, e.g. record a playthrough in a few segments, then merge them into one macro later
- * F4 to save all 10 macros to file "replays.bin"; it's loaded on startup automatically
+ * the default "replays.bin" file included with the game has a full playthrough as macro 0; just press 0 and have the whole game spoiled even more than it was before!
 
 Level editor with questionable controls:
  * F10 to toggle level editor on/off
@@ -23,8 +23,8 @@ Level editor with questionable controls:
  * wasd to toggle wires on the cell under the cursor
  * j for bridge wires, k for conductive surface, o for circle, p to toggle power on the circle
  * ctrl + hold right mouse button and drag to place doors
- * F5 to save the map to file "save.bin" (it'll overwrite the original file!); it's loaded on startup automatically
- * F9 to load from the same file
+ * F5 to save the map to file "save.bin"; move it "assets/level.bin" to make it load on startup
+ * F9 to load from "save.bin" (if exists) or "assets/level.bin"
  * alt+r to reset everything to a small empty map
  * alt+arrow keys to resize the map
 

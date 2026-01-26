@@ -74,6 +74,7 @@ void World::load(const std::vector<char> &in_vec, bool ignore_camera) {
             absolute_zoom = z;
         }
     }
+    num_static_vertices = -1;
     cells.resize(size.y);
     for (int y = 0; y < size.y; ++y) {
         cells[y].assign(size.x, {});
@@ -146,15 +147,15 @@ bool read_whole_file(std::string path, std::vector<char> &data) {
     return true;
 }
     
-void World::save_to_file() {
+void World::save_to_file(const char *path) {
     std::vector<char> data;
     save(data);
-    write_whole_file(save_file_path, data);
+    write_whole_file(path, data);
 }
 
-bool World::load_from_file() {
+bool World::load_from_file(const char *path) {
     std::vector<char> data;
-    if (!read_whole_file(save_file_path, data))
+    if (!read_whole_file(path, data))
         return false;
     load(data, false);
     return true;
