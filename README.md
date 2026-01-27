@@ -11,22 +11,26 @@ I made this just to learn some gamedev (and because I got briefly obsessed with 
 ---
 
 Game controls:
- * middle-mouse-button + drag to pan
+ * middle-mouse-button + drag to pan (or ctrl + mouse drag)
  * mouse wheel to zoom
- * mouse click
- * wasd or arrows
+ * mouse click to select
+ * wasd or arrows to move
  * can also drag tiles with the mouse
  * z to undo, x to redo
 
-Janky terrible record/replay controls:
- * ctrl+digit (ctrl+0 .. ctrl+9) to start recording a macro (while recording, redo is not allowed; also, I wouldn't be surprised if undo during animation breaks recording, I haven't checked)
+---
+
+Additional controls:
+
+Record/replay:
+ * ctrl+digit (ctrl+0 .. ctrl+9) to start recording a macro (while recording, redo is not allowed; also, I wouldn't be surprised if something like undo during animation breaks recording, I haven't checked)
  * ctrl+digit again to stop recording and save all 10 macros to file "replays.bin"; it's loaded on startup automatically
  * digit to replay a previous recording; it just repeats the inputs, so if you start from a different state, it'll probably do nonsense moves and give up early
  * if there's already a macro on that digit, ctrl+digits clears it; ctrl+shift+digit to append to it instead
  * weird tech: you can replay a macro while recording another macro; this way you can concatenate multiple macros together, e.g. record a playthrough in a few segments, then merge them into one macro later
  * the default "replays.bin" file included with the game has a full playthrough as macro 0; just press 0 and have the whole game spoiled even more than it was before!
 
-Level editor with questionable controls:
+Level editor:
  * F10 to toggle level editor
  * click a tile in palette on the right to select it (left column is movable tiles, right column is floor/walls/triggers)
  * or press 'q' while hovering over a tile in the world to copy it

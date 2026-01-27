@@ -544,7 +544,7 @@ void update(World &w) {
         w.camera.target += (p / w.camera.offset - Vector2 {1.f, 1.f}) * (1/w.absolute_zoom - 1/new_zoom);
         w.absolute_zoom = new_zoom;
     }
-    if (IsMouseButtonDown(MOUSE_BUTTON_MIDDLE)) {
+    if (IsMouseButtonDown(MOUSE_BUTTON_MIDDLE) || (IsMouseButtonDown(MOUSE_BUTTON_LEFT) && IsKeyDown(KEY_LEFT_CONTROL))) {
         w.camera.target -= GetMouseDelta() / w.camera.zoom;
     }
     w.camera.target = Vector2Max(Vector2{0, 0}, Vector2Min(w.size.to_float(), w.camera.target));
