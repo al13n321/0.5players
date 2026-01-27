@@ -307,6 +307,7 @@ struct Action {
     IVec pos;
     // If ACTION_MOVE, move direction.
     Direction dir;
+    bool from_replay = false;
 };
 
 enum WhichMesh {
@@ -411,7 +412,7 @@ struct World {
     void save(std::vector<char> &out) const;
     void load(const std::vector<char> &in_vec, bool ignore_camera);
     void save_to_file(const char *path);
-    bool load_from_file(const char *path);
+    bool load_from_file(const char *path, bool ignore_camera);
     void save_replays(std::vector<char> &out) const;
     void load_replays(const std::vector<char> &in_vec);
     void save_replays_to_file();

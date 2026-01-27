@@ -24,7 +24,7 @@ int main() {
     SetTargetFPS(144);
 
     World w;
-    if (!w.load_from_file("assets/level.bin"))
+    if (!w.load_from_file("assets/level.bin", false))
     {
         w.clear_grid({10, 10});
         w.editor.on = true;

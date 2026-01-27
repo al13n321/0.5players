@@ -153,11 +153,11 @@ void World::save_to_file(const char *path) {
     write_whole_file(path, data);
 }
 
-bool World::load_from_file(const char *path) {
+bool World::load_from_file(const char *path, bool ignore_camera) {
     std::vector<char> data;
     if (!read_whole_file(path, data))
         return false;
-    load(data, false);
+    load(data, ignore_camera);
     return true;
 }
 

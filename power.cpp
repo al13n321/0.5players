@@ -78,7 +78,7 @@ void recalc_static_connectivity(World &w) {
     }
 }
 
-void update_power(World &w) {
+bool update_power(World &w) {
     std::vector<std::pair<const char *, double>> profiling;
     double start_time = GetTime();
     double prev_time = start_time;
@@ -140,8 +140,6 @@ void update_power(World &w) {
                 if (power.wires & (1 << dir))
                     power.vertex[dir] = v;
         }
-
-        power.power = WIRE_NONE;
     };
     for (int y = 1; y + 1 < w.size.y; ++y) {
         for (int x = 1; x + 1 < w.size.x; ++x) {
@@ -452,16 +450,20 @@ void update_power(World &w) {
     }
     end_profiling_zone("comp");
 
+    bool any_changed = false;
     auto apply_result = [&](Power &power) {
+        int new_power = 0;
         if (power.wires & WIRE_BRIDGE) {
             if (g.v.at(std::max(power.vertex[DIR_LEFT], power.vertex[DIR_RIGHT])).final_lit)
-                power.power |= WIRE_LEFT | WIRE_RIGHT;
+                new_power |= WIRE_LEFT | WIRE_RIGHT;
             if (g.v.at(std::max(power.vertex[DIR_UP], power.vertex[DIR_DOWN])).final_lit)
-                power.power |= WIRE_UP | WIRE_DOWN;
+                new_power |= WIRE_UP | WIRE_DOWN;
         } else if (power.wires) {
             if (g.v.at(power.vertex[4]).final_lit)
-                power.power = power.wires;
+                new_power = power.wires;
         }
+        any_changed |= new_power != power.power;
+        power.power = new_power;
     };
     for (int y = 1; y + 1 < w.size.y; ++y)
         for (int x = 1; x + 1 < w.size.x; ++x)
@@ -482,4 +484,6 @@ void update_power(World &w) {
         }
         std::cout << ss.str() << std::endl;
     }*/
+
+    return any_changed;
 }

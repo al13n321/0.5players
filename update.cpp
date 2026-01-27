@@ -211,8 +211,8 @@ void handle_misc_input(World &w, IVec hover) {
         if (IsKeyPressed(KEY_F5))
             w.save_to_file("save.bin");
         if (IsKeyPressed(KEY_F9)) {
-            if (!w.load_from_file("save.bin"))
-                w.load_from_file("assets/level.bin");
+            if (!w.load_from_file("save.bin", true))
+                w.load_from_file("assets/level.bin", true);
             undoable = true;
         }
     } else {
@@ -323,14 +323,18 @@ std::vector<int> find_welded_tile_group(World &w, int ti) {
     return res;
 }
 
+// Returns true if the set of selected tiles changed.
 bool select_tile(World &w, IVec pos) {
     Cell &cell = w.cells.at(pos.y).at(pos.x);
     if (cell.tile != -1 && w.tiles.at(cell.tile).selected)
-        return true; // keep all selected tiles selected
-    for (Tile &tile : w.tiles)
+        return false; // keep all selected tiles selected if one of them is clicked
+    bool had_selected = false;
+    for (Tile &tile : w.tiles) {
+        had_selected |= tile.selected;
         tile.selected = false;
+    }
     if (cell.tile == -1)
-        return false;
+        return had_selected;
     std::vector<int> tiles = find_welded_tile_group(w, cell.tile);
     for (int ti: tiles)
         w.tiles.at(ti).selected = true;
@@ -420,8 +424,9 @@ std::vector<std::pair<IVec, Direction>> find_barriers_for_trigger(World &w, IVec
     return res;
 }
 
-void update_barriers_and_perform_cuts(World &w) {
+bool update_barriers_and_perform_cuts(World &w) {
     std::vector<std::pair<IVec, Direction>> seen; // just for assert
+    bool any_changed = false;
     for (int y = 1; y + 1 < w.size.y; ++y) {
         for (int x = 1; x + 1 < w.size.x; ++x) {
             IVec pos {x, y};
@@ -436,6 +441,7 @@ void update_barriers_and_perform_cuts(World &w) {
                 Cell &cell2 = w.get_cell(pos);
                 assert(cell2.barrier & (1 << dir));
                 bool was_active = !!(cell2.barrier_active & (1 << dir));
+                any_changed |= active != was_active;
                 if (was_active && !active) {
                     cell2.barrier_active &= ~(1 << dir);
                 } else if (active && !was_active) {
@@ -464,6 +470,8 @@ void update_barriers_and_perform_cuts(World &w) {
             }
         }
     }*/
+
+    return any_changed;
 }
 
 bool move_advance_if_needed(World &w) {
@@ -509,8 +517,13 @@ bool move_advance_if_needed(World &w) {
             for (Tile &t: w.tiles)
                 t.moving = false;
 
-            update_power(w);
-            update_barriers_and_perform_cuts(w);
+            // There can be a cascade of updates, e.g. if a powered wire opened a barrier, which connected another wire, which opened another barrier.
+            // We have to do all these updates in one frame for replays to work predictably.
+            while (true) {
+                update_power(w);
+                if (!update_barriers_and_perform_cuts(w))
+                    break;
+            }
 
             w.push_undo();
         } else {
@@ -574,7 +587,10 @@ void update(World &w) {
                         w.recordings.at(i).clear();
                 }
             } else {
-                w.buffered_actions.insert(w.buffered_actions.end(), w.recordings.at(i).begin(), w.recordings.at(i).end());
+                for (Action a: w.recordings.at(i)) {
+                    a.from_replay = true;
+                    w.buffered_actions.push_back(a);
+                }
             }
         }
     }
@@ -606,15 +622,18 @@ void update(World &w) {
         Action action = w.buffered_actions.front();
         bool acted = false;
         bool dequeue = true;
+        bool from_replay = action.from_replay;
         if (action.type == ACTION_SELECT) {
             acted = select_tile(w, action.pos);
-            if (acted) {
-                w.dragging_tile = w.get_cell(action.pos).tile;
-            } else {
-                w.dragging_tile = -1;
+            w.dragging_tile = -1;
+            if (!acted) {
                 w.buffered_actions.clear(); // subsequent moves would probably move unintended tiles
                 dequeue = false;
             }
+            // Dragging tile may change even if selection didn't change.
+            int ti = w.get_cell(action.pos).tile;
+            if (ti != -1 && w.tiles.at(ti).selected)
+                w.dragging_tile = ti;
         } else if (action.type == ACTION_MOVE) {
             acted = move_start(w, action.dir, -1);
         } else if (action.type == ACTION_DRAG && w.dragging_tile != -1) {
@@ -638,6 +657,11 @@ void update(World &w) {
             }
             dequeue = !acted;
         }
+        if (!acted && from_replay) {
+            // Desync.
+            w.buffered_actions.clear();
+            dequeue = false;
+        }
         if (dequeue)
             w.buffered_actions.pop_front();
         if (w.recording_active != -1 && acted)
@@ -653,10 +677,9 @@ void update(World &w) {
     }
 
     if (!updated_power && !w.editor.on) {
+        update_power(w);
         if (w.move.stage == STAGE_NONE)
             update_barriers_and_perform_cuts(w);
-
-        update_power(w);
     }
 
     check_consistency(w);
